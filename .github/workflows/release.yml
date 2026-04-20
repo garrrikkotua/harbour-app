@@ -1,0 +1,111 @@
+name: Release
+
+# Triggers:
+#   - Pushing a tag that looks like v1.2.3 (standard SemVer)
+#   - Manual dispatch from the Actions tab
+#
+# Why tag-triggered and not every commit:
+#   - Desktop apps don't need a binary per commit — that's noise
+#   - Tags give clean version numbers for users to reference
+#   - Flow: merge features to main freely, run `git tag v0.2.0 && git push --tags`
+#     when you actually want a release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 0.2.0) — used only for manual dispatch'
+        required: true
+        default: '0.0.0'
+
+permissions:
+  contents: write  # needed by softprops/action-gh-release to create the release
+
+jobs:
+  build:
+    name: Build Harbour.app
+    runs-on: macos-14   # Apple Silicon, has Xcode 15+
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "tag=v${{ inputs.version }}"     >> "$GITHUB_OUTPUT"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+            echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build release
+        run: ./build.sh
+        env:
+          CONFIG: release
+
+      - name: Verify bundle
+        run: |
+          ls -la build/Harbour.app/Contents/MacOS/
+          ls -la build/Harbour.app/Contents/Resources/
+          codesign -vv build/Harbour.app || true
+
+      - name: Create zip
+        run: |
+          cd build
+          ditto -c -k --sequesterRsrc --keepParent Harbour.app "Harbour-${{ steps.version.outputs.version }}.zip"
+          ls -la *.zip
+
+      - name: Create DMG
+        run: |
+          cd build
+          hdiutil create -volname "Harbour" \
+                         -srcfolder Harbour.app \
+                         -ov -format UDZO \
+                         "Harbour-${{ steps.version.outputs.version }}.dmg"
+          ls -la *.dmg
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Harbour-${{ steps.version.outputs.version }}
+          path: |
+            build/*.zip
+            build/*.dmg
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Harbour ${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          files: |
+            build/*.zip
+            build/*.dmg
+          body: |
+            ## Install
+
+            Download the `.dmg` below, open it, and drag `Harbour.app` to your Applications folder.
+
+            > **Unsigned build.** On first launch, right-click `Harbour.app` → **Open** → **Open** (macOS Gatekeeper will otherwise refuse to run unsigned apps).
+
+            ## Changes
+
+            See commit history for changes.
