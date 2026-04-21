@@ -25,7 +25,13 @@ final class BlockManager: ObservableObject {
         refreshState()
 
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshState() }
+            guard let self else { return }
+            // Timer fires on the RunLoop it was scheduled on (main). Our
+            // init is @MainActor, so we're already on the right isolation —
+            // explicitly hop to silence Swift 6's concurrency checker.
+            Task { @MainActor [self] in
+                self.refreshState()
+            }
         }
     }
 
