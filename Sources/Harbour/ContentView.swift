@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import HarbourCore
 
 struct ContentView: View {
     @ObservedObject var manager: BlockManager
@@ -128,7 +129,7 @@ private struct Hero: View {
                 Text("Start a block")
                     .font(Theme.serif(size: 32, weight: .bold))
                     .foregroundStyle(Theme.textPrimary)
-                Text("Pick what to block. Harbour keeps it locked until the timer ends.")
+                Text("Pick what to block. Harbour Control keeps it locked until the timer ends.")
                     .font(Theme.sans(size: 13))
                     .foregroundStyle(Theme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -141,7 +142,7 @@ private struct Hero: View {
                         .foregroundStyle(Theme.textSecondary)
                 }
                 .buttonStyle(.plain)
-                .help("How Harbour works")
+                .help("How Harbour Control works")
             }
         }
     }
@@ -684,7 +685,7 @@ private struct BlocklistSection: View {
         VStack(spacing: 10) {
             // Disclosure header
             Button {
-                withAnimation(.easeInOut(duration: 0.22)) { expanded.toggle() }
+                expanded.toggle()
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: expanded ? "chevron.down" : "chevron.right")
@@ -714,9 +715,10 @@ private struct BlocklistSection: View {
                     addControls
                     listBody
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.opacity)
             }
         }
+        .animation(.easeInOut(duration: 0.18), value: expanded)
     }
 
     private var addControls: some View {

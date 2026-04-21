@@ -25,10 +25,10 @@ struct FAQView: View {
         FAQItem(
             q: "How does website blocking work?",
             a: """
-            Harbour uses two layers:
+            Harbour Control uses two layers:
 
             1. **/etc/hosts** — maps blocked domains to 127.0.0.1 so your DNS resolver drops them.
-            2. **pfctl (Packet Filter)** — macOS's built-in firewall. Harbour resolves each blocked domain's IP addresses and adds `block drop` rules so packets can't leave your machine, even over a VPN.
+            2. **pfctl (Packet Filter)** — macOS's built-in firewall. Harbour Control resolves each blocked domain's IP addresses and adds `block drop` rules so packets can't leave your machine, even over a VPN.
 
             IPs are re-resolved every 5 minutes to keep up with services that rotate them.
             """
@@ -36,7 +36,7 @@ struct FAQView: View {
         FAQItem(
             q: "How does app blocking work?",
             a: """
-            The Harbour daemon polls the running process list once per second. If any process's executable path lives inside a blocked `.app` bundle, the daemon sends it `SIGKILL`.
+            The Harbour Control daemon polls the running process list once per second. If any process's executable path lives inside a blocked `.app` bundle, the daemon sends it `SIGKILL`.
 
             So the app gets about one second of life, then dies. Launching it again just kills it again.
             """
@@ -46,7 +46,7 @@ struct FAQView: View {
             a: """
             Yes. `/etc/hosts` alone can be bypassed by VPNs that use their own DNS, but the `pfctl` packet filter runs on your host's network stack and drops packets regardless of where your DNS resolution happens.
 
-            If a site still loads, it's likely because the domain resolves to a new IP that Harbour hasn't seen yet. Harbour re-resolves every 5 minutes to catch this.
+            If a site still loads, it's likely because the domain resolves to a new IP that Harbour Control hasn't seen yet. Harbour Control re-resolves every 5 minutes to catch this.
             """
         ),
         FAQItem(
@@ -60,7 +60,7 @@ struct FAQView: View {
         FAQItem(
             q: "Is my admin password stored?",
             a: """
-            No. Harbour asks for your password only once — to install the daemon — via macOS's built-in `osascript` admin prompt. The password goes straight to macOS's authorization service and is never seen by Harbour itself.
+            No. Harbour Control asks for your password only once — to install the daemon — via macOS's built-in `osascript` admin prompt. The password goes straight to macOS's authorization service and is never seen by Harbour Control itself.
 
             After the daemon is running, it's already root and doesn't need your password again.
             """
@@ -74,7 +74,7 @@ struct FAQView: View {
             - launchd plist: `/Library/LaunchDaemons/com.harbour.daemon.plist`
             - Daemon log: `/var/log/harbour-daemon.log`
 
-            No data ever leaves your machine. Harbour doesn't phone home.
+            No data ever leaves your machine. Harbour Control doesn't phone home.
             """
         ),
         FAQItem(
@@ -82,15 +82,15 @@ struct FAQView: View {
             a: """
             Most likely one of:
 
-            1. **Subdomain not listed.** Harbour blocks `example.com` and `www.example.com` automatically, but not `mail.example.com`. Add the specific subdomain.
-            2. **IP rotation.** Big sites (Cloudflare, AWS) cycle IPs. Harbour re-resolves every 5 minutes, so wait a bit or re-add the domain.
+            1. **Subdomain not listed.** Harbour Control blocks `example.com` and `www.example.com` automatically, but not `mail.example.com`. Add the specific subdomain.
+            2. **IP rotation.** Big sites (Cloudflare, AWS) cycle IPs. Harbour Control re-resolves every 5 minutes, so wait a bit or re-add the domain.
             3. **DNS cache.** Open Terminal and run `sudo dscacheutil -flushcache` — the daemon does this, but browsers cache too. Try a different tab.
             """
         ),
         FAQItem(
-            q: "How do I uninstall Harbour?",
+            q: "How do I uninstall Harbour Control?",
             a: """
-            When no block is active, simply drag `Harbour.app` to the Trash. The daemon only exists during a block and uninstalls itself automatically when the timer expires.
+            When no block is active, simply drag `Harbour Control.app` to the Trash. The daemon only exists during a block and uninstalls itself automatically when the timer expires.
 
             If you want to nuke a stuck install (only possible with `sudo`):
 
@@ -107,7 +107,7 @@ struct FAQView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("How Harbour works")
+                Text("How Harbour Control works")
                     .font(.title2.bold())
                 Spacer()
                 Button {

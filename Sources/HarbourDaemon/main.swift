@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import HarbourCore
 
 // libproc — Darwin ships proc_listallpids / proc_pidpath. Activity Monitor uses
 // these; they always return the canonical executable path, unlike `ps -o comm`
@@ -98,27 +99,7 @@ let alwaysBlockIPs: [String] = [
     "94.140.14.14", "94.140.15.15",
 ]
 
-// MARK: - Model (duplicated from GUI; kept in sync by construction)
-
-struct BlockState: Codable {
-    let startTime: Date
-    let endTime: Date
-    let domains: [String]
-    let blockedPaths: [String]
-    let blockedBundleIDs: [String]
-    var additionsPath: String? = nil
-}
-
-struct BlockedAppEntry: Codable {
-    let name: String
-    let path: String
-    let bundleID: String
-}
-
-struct BlockAdditions: Codable {
-    var domains: [String] = []
-    var apps: [BlockedAppEntry] = []
-}
+// Models (BlockState, BlockAdditions, BlockedApp) come from HarbourCore.
 
 // MARK: - Helpers
 
@@ -191,10 +172,13 @@ func run(_ path: String, _ args: [String], timeoutSec: Double = 10) -> (status: 
     _ = errGroup.wait(timeout: .now() + 2)
 
     let status = task.terminationStatus
-    let output = String(data: outData, encoding: .utf8) ?? ""
-    let errOut = String(data: errData, encoding: .utf8) ?? ""
-    if status != 0 && !errOut.isEmpty {
-        log("run: \(path) rc=\(status) stderr=\(errOut.trimmingCharacters(in: .whitespacesAndNewlines))")
+    let stdoutStr = String(data: outData, encoding: .utf8) ?? ""
+    let stderrStr = String(data: errData, encoding: .utf8) ?? ""
+    // Return combined stdout+stderr so callers can scan for things like
+    // pfctl's "Token : ..." line that historically lands on stderr.
+    let output = stdoutStr + (stderrStr.isEmpty ? "" : "\n" + stderrStr)
+    if status != 0 && !stderrStr.isEmpty {
+        log("run: \(path) rc=\(status) stderr=\(stderrStr.trimmingCharacters(in: .whitespacesAndNewlines))")
     }
     return (status, output)
 }
@@ -204,78 +188,20 @@ func log(_ msg: String) {
     FileHandle.standardOutput.write(Data("[\(ts)] \(msg)\n".utf8))
 }
 
-// MARK: - Hosts file
-
-func removeBlockSection(from content: String) -> String {
-    let lines = content.components(separatedBy: "\n")
-    // First pass: locate every START/END marker pair. If we see a START without
-    // a matching END, we refuse to strip — better to leave stale entries than
-    // truncate the user's hosts file to EOF.
-    var skipRanges: [ClosedRange<Int>] = []
-    var pendingStart: Int?
-    for (i, line) in lines.enumerated() {
-        if line.contains(markerStart) {
-            if pendingStart != nil {
-                // Nested/duplicate start; close the previous unmatched one at the prior line.
-                // Treat the new start as the authoritative one.
-                pendingStart = i
-            } else {
-                pendingStart = i
-            }
-        } else if line.contains(markerEnd), let start = pendingStart {
-            skipRanges.append(start...i)
-            pendingStart = nil
-        }
-    }
-    if pendingStart != nil {
-        log("hosts: found START marker with no matching END — refusing to edit file")
-        return content
-    }
-
-    var result: [String] = []
-    for (i, line) in lines.enumerated() {
-        if skipRanges.contains(where: { $0.contains(i) }) { continue }
-        result.append(line)
-    }
-    while result.last?.isEmpty == true { result.removeLast() }
-    return result.joined(separator: "\n") + "\n"
-}
-
-/// Returns true if `s` is a plausible DNS name — no whitespace, no shell
-/// metacharacters, no marker substrings, length bounded.
-func isSafeDomain(_ s: String) -> Bool {
-    guard !s.isEmpty, s.count <= 253 else { return false }
-    if s.contains(markerStart) || s.contains(markerEnd) { return false }
-    let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789.-")
-    for ch in s.lowercased() where !allowed.contains(ch) { return false }
-    return true
-}
+// MARK: - Hosts file (marker handling in HarbourCore)
 
 func applyHosts(domains: [String]) {
     guard let hosts = try? String(contentsOfFile: hostsFile, encoding: .utf8) else {
         log("could not read hosts file")
         return
     }
-    var cleaned = removeBlockSection(from: hosts)
+    var cleaned = HostsMarker.removeBlockSection(from: hosts, start: markerStart, end: markerEnd)
     if !cleaned.hasSuffix("\n") { cleaned += "\n" }
 
-    // Merge the user's domains with our always-block DoH domains so browsers
-    // can't side-step /etc/hosts via DNS-over-HTTPS.
+    // Merge user's domains with always-block DoH domains so browsers can't
+    // side-step /etc/hosts via DNS-over-HTTPS.
     let all = Array(Set(domains + alwaysBlockDomains))
-
-    // SelfControl uses 0.0.0.0 / :: instead of 127.0.0.1 / ::1. This matters:
-    // browsers (Chrome/Arc in particular) treat loopback answers from hosts as
-    // "suspicious DNS manipulation" and can fall back to DoH. A null-route
-    // 0.0.0.0 is accepted as "host unreachable" with no second-guessing.
-    var addition = "\n\(markerStart)\n"
-    for d in all where isSafeDomain(d) {
-        let stripped = d.hasPrefix("www.") ? String(d.dropFirst(4)) : d
-        addition += "0.0.0.0\t\(stripped)\n"
-        addition += "0.0.0.0\twww.\(stripped)\n"
-        addition += "::\t\(stripped)\n"
-        addition += "::\twww.\(stripped)\n"
-    }
-    addition += "\(markerEnd)\n"
+    let addition = HostsMarker.buildHostsBlock(domains: all, start: markerStart, end: markerEnd)
 
     try? (cleaned + addition).write(toFile: hostsFile, atomically: true, encoding: .utf8)
     run("/usr/bin/dscacheutil", ["-flushcache"])
@@ -284,29 +210,17 @@ func applyHosts(domains: [String]) {
 
 func removeHosts() {
     guard let hosts = try? String(contentsOfFile: hostsFile, encoding: .utf8) else { return }
-    let cleaned = removeBlockSection(from: hosts)
+    let cleaned = HostsMarker.removeBlockSection(from: hosts, start: markerStart, end: markerEnd)
     try? cleaned.write(toFile: hostsFile, atomically: true, encoding: .utf8)
     run("/usr/bin/dscacheutil", ["-flushcache"])
     run("/usr/bin/killall", ["-HUP", "mDNSResponder"])
 }
 
 // MARK: - pfctl (packet filter) — works even when /etc/hosts is bypassed (VPN, DoH, etc.)
-
-func isValidIP(_ s: String) -> Bool {
-    // Reject anything with spaces or ending in a dot (dig sometimes returns CNAMEs)
-    if s.isEmpty || s.contains(" ") || s.hasSuffix(".") { return false }
-    // IPv4: four dot-separated numeric octets
-    let dotParts = s.split(separator: ".")
-    if dotParts.count == 4, dotParts.allSatisfy({ Int($0).map { $0 >= 0 && $0 <= 255 } ?? false }) {
-        return true
-    }
-    // IPv6: contains colon (rough check)
-    if s.contains(":") { return true }
-    return false
-}
+// Validation helpers (isSafeDomain / isValidIP) come from HarbourCore.DomainValidation.
 
 func resolveIPs(for domain: String) -> [String] {
-    guard isSafeDomain(domain) else { return [] }
+    guard DomainValidation.isSafeDomain(domain) else { return [] }
     var ips = Set<String>()
     let variants = [domain, "www.\(domain)"]
     for name in variants {
@@ -320,7 +234,7 @@ func resolveIPs(for domain: String) -> [String] {
             )
             for line in out.split(separator: "\n") {
                 let ip = line.trimmingCharacters(in: .whitespaces)
-                if isValidIP(ip) { ips.insert(ip) }
+                if DomainValidation.isValidIP(ip) { ips.insert(ip) }
             }
         }
     }
@@ -442,7 +356,7 @@ var accumulatedIPs = Set<String>()
 
 func applyPF(domains: [String]) {
     // Skip entirely for app-only blocks.
-    let candidates = (domains + alwaysBlockDomains).filter { isSafeDomain($0) }
+    let candidates = (domains + alwaysBlockDomains).filter { DomainValidation.isSafeDomain($0) }
     guard !candidates.isEmpty else { return }
 
     // Do DNS resolution OUTSIDE the lock — it's slow (~100s) and we don't need
@@ -622,6 +536,8 @@ let neverKillPrefixes: [String] = [
     "/System/Applications/System Settings.app",
     "/System/Applications/Utilities/Terminal.app",
     "/Applications/Utilities/Terminal.app",
+    "/Applications/Harbour.app",
+    "/Applications/Harbour Control.app",
 ]
 
 let neverKillPIDThreshold: pid_t = 100  // launchd + core system daemons
@@ -673,14 +589,15 @@ func fullCleanup() {
     log("cleanup: removing hosts + pf rules + state")
     removeHosts()
     removePF()
+    // Read additionsPath BEFORE we delete state.json — otherwise the additions
+    // file leaks across blocks.
+    let additionsPath = (try? Data(contentsOf: URL(fileURLWithPath: stateFile)))
+        .flatMap { try? JSONDecoder().decode(BlockState.self, from: $0) }?
+        .additionsPath
     try? FileManager.default.removeItem(atPath: stateFile)
     try? FileManager.default.removeItem(atPath: plistPath)
-    // Clean up the user-writable additions file so it doesn't leak into the next block.
-    if let additionsPath = (try? Data(contentsOf: URL(fileURLWithPath: stateFile)))
-        .flatMap({ try? JSONDecoder().decode(BlockState.self, from: $0) })?
-        .additionsPath
-    {
-        try? FileManager.default.removeItem(atPath: additionsPath)
+    if let p = additionsPath {
+        try? FileManager.default.removeItem(atPath: p)
     }
     // Best-effort bootout — if launchctl is missing or the job is already gone,
     // that's fine. We rely on KeepAlive.SuccessfulExit=false to prevent a loop.
@@ -755,13 +672,16 @@ func reloadAdditionsIfChanged() -> Bool {
         return false
     }
     if mtime == lastAdditionsMtime { return false }
-    lastAdditionsMtime = mtime
 
+    // Only accept the new mtime *after* a successful decode — if the file
+    // is torn mid-write (atomic swap hasn't landed yet) we want to retry on
+    // the next tick rather than silently skip this change forever.
     guard let data = try? Data(contentsOf: URL(fileURLWithPath: additionsPath)),
           let adds = try? JSONDecoder().decode(BlockAdditions.self, from: data)
     else {
         return false
     }
+    lastAdditionsMtime = mtime
 
     // Union: merge new domains and paths. Never remove.
     let origDomainCount = effectiveDomains.count

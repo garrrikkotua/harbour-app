@@ -1,13 +1,13 @@
 import Foundation
 
-enum DomainPreset: String, CaseIterable, Identifiable {
+public enum DomainPreset: String, CaseIterable, Identifiable {
     case socialMedia = "Social Media"
     case videoStreaming = "Video & Streaming"
     case newsForums = "News & Forums"
 
-    var id: String { rawValue }
+    public var id: String { rawValue }
 
-    var symbol: String {
+    public var symbol: String {
         switch self {
         case .socialMedia: return "bubble.left.and.bubble.right"
         case .videoStreaming: return "play.tv"
@@ -15,7 +15,7 @@ enum DomainPreset: String, CaseIterable, Identifiable {
         }
     }
 
-    var domains: [String] {
+    public var domains: [String] {
         switch self {
         case .socialMedia:
             return [

@@ -54,36 +54,42 @@ jobs:
             echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build release
+      - name: Run tests
+        run: swift test -c debug
+
+      - name: Build release (universal arm64 + x86_64)
         run: ./build.sh
         env:
           CONFIG: release
+          UNIVERSAL: "1"
 
       - name: Verify bundle
         run: |
-          ls -la build/Harbour.app/Contents/MacOS/
-          ls -la build/Harbour.app/Contents/Resources/
-          codesign -vv build/Harbour.app || true
+          ls -la "build/Harbour Control.app/Contents/MacOS/"
+          ls -la "build/Harbour Control.app/Contents/Resources/"
+          lipo -info "build/Harbour Control.app/Contents/MacOS/Harbour"
+          lipo -info "build/Harbour Control.app/Contents/Resources/harbour-daemon"
+          codesign -vv "build/Harbour Control.app" || true
 
       - name: Create zip
         run: |
           cd build
-          ditto -c -k --sequesterRsrc --keepParent Harbour.app "Harbour-${{ steps.version.outputs.version }}.zip"
+          ditto -c -k --sequesterRsrc --keepParent "Harbour Control.app" "Harbour-Control-${{ steps.version.outputs.version }}.zip"
           ls -la *.zip
 
       - name: Create DMG
         run: |
           cd build
-          hdiutil create -volname "Harbour" \
-                         -srcfolder Harbour.app \
+          hdiutil create -volname "Harbour Control" \
+                         -srcfolder "Harbour Control.app" \
                          -ov -format UDZO \
-                         "Harbour-${{ steps.version.outputs.version }}.dmg"
+                         "Harbour-Control-${{ steps.version.outputs.version }}.dmg"
           ls -la *.dmg
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Harbour-${{ steps.version.outputs.version }}
+          name: Harbour-Control-${{ steps.version.outputs.version }}
           path: |
             build/*.zip
             build/*.dmg
@@ -94,7 +100,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          name: Harbour ${{ steps.version.outputs.version }}
+          name: Harbour Control ${{ steps.version.outputs.version }}
           generate_release_notes: true
           files: |
             build/*.zip
@@ -102,10 +108,16 @@ jobs:
           body: |
             ## Install
 
-            Download the `.dmg` below, open it, and drag `Harbour.app` to your Applications folder.
+            **Universal build** — runs on Apple Silicon (M1/M2/M3/M4) and Intel Macs.
 
-            > **Unsigned build.** On first launch, right-click `Harbour.app` → **Open** → **Open** (macOS Gatekeeper will otherwise refuse to run unsigned apps).
+            1. Download the `.dmg` below
+            2. Open it and drag **Harbour Control.app** to your Applications folder
+            3. First launch: right-click the app → **Open** → **Open** (macOS Gatekeeper refuses unsigned apps otherwise). Or run once: `xattr -cr "/Applications/Harbour Control.app"`
+
+            ## Requirements
+
+            macOS 13 Ventura or later. Admin password needed once per block to install the background enforcer.
 
             ## Changes
 
-            See commit history for changes.
+            See commit history for this release below.

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import HarbourCore
 
 struct AppEntry: Identifiable, Hashable {
     let app: BlockedApp

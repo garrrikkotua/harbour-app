@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test + Build
+    runs-on: macos-14
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Run HarbourCore tests
+        run: swift test -c debug --parallel
+
+      - name: Build debug (host arch only — fast sanity check)
+        run: swift build -c debug
+        env:
+          UNIVERSAL: "0"

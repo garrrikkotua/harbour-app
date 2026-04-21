@@ -1,6 +1,6 @@
 import Foundation
 
-enum Safety {
+public enum Safety {
     /// App paths we refuse to add to the block list. These are mirrored in
     /// the daemon's `neverKillPrefixes` for defence-in-depth. Covers:
     ///  - System Settings / Preferences (only way to fix broken state without CLI)
@@ -8,7 +8,7 @@ enum Safety {
     ///  - Recovery / diagnostic tools (Activity Monitor, Console, Disk Utility,
     ///    System Information, Migration Assistant)
     ///  - Harbour.app itself — blocking it would be pointlessly confusing.
-    static let criticalAppPaths: Set<String> = [
+    public static let criticalAppPaths: Set<String> = [
         "/System/Applications/System Preferences.app",
         "/System/Applications/System Settings.app",
         "/System/Applications/Utilities/Terminal.app",
@@ -20,11 +20,12 @@ enum Safety {
         "/System/Applications/Utilities/Migration Assistant.app",
         "/System/Applications/Utilities/Keychain Access.app",
         "/Applications/Harbour.app",
+        "/Applications/Harbour Control.app",
     ]
 
     /// Also block anything living inside these system directories from
     /// entering the picker at all.
-    static let criticalAppPrefixes: [String] = [
+    public static let criticalAppPrefixes: [String] = [
         "/System/Library/CoreServices/",
         "/System/Library/PrivateFrameworks/",
         "/System/Library/Frameworks/",
@@ -33,7 +34,7 @@ enum Safety {
         "/usr/libexec/",
     ]
 
-    static func isCriticalApp(path: String) -> Bool {
+    public static func isCriticalApp(path: String) -> Bool {
         if criticalAppPaths.contains(path) { return true }
         for p in criticalAppPrefixes where path.hasPrefix(p) { return true }
         return false
@@ -41,7 +42,7 @@ enum Safety {
 
     /// Domains that commonly break system functionality when blocked.
     /// Not forbidden — we just warn the user.
-    static let riskyDomains: Set<String> = [
+    public static let riskyDomains: Set<String> = [
         "apple.com",
         "icloud.com",
         "me.com",
@@ -50,7 +51,7 @@ enum Safety {
     ]
 
     /// Returns which entries in the list are risky.
-    static func riskyEntries(from domains: [String]) -> [String] {
+    public static func riskyEntries(from domains: [String]) -> [String] {
         domains.filter { d in
             let host = d.lowercased()
             return riskyDomains.contains(host) || riskyDomains.contains(where: { host.hasSuffix(".\($0)") })

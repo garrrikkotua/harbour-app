@@ -11,7 +11,7 @@ struct OnboardingView: View {
     }
     private let steps: [Step] = [
         Step(id: 0,
-             title: "Welcome to Harbour",
+             title: "Welcome to Harbour Control",
              body: "A focus app with no off switch. Pick what to block, set a timer, and work until it's over."),
         Step(id: 1,
              title: "Block sites and apps",

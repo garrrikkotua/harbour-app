@@ -6,7 +6,7 @@ struct HarbourApp: App {
     @AppStorage("harbour.didOnboard") private var didOnboard: Bool = false
 
     var body: some Scene {
-        WindowGroup("Harbour") {
+        WindowGroup("Harbour Control") {
             Group {
                 if didOnboard {
                     ContentView(manager: manager)

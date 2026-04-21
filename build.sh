@@ -1,15 +1,27 @@
 #!/bin/bash
 # Build Harbour.app bundle containing both the GUI and the privileged daemon.
+# Produces a universal binary (arm64 + x86_64) that runs on any Mac from 2013 on.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 CONFIG="${CONFIG:-release}"
-APP_DIR="build/Harbour.app"
-BIN_DIR=".build/${CONFIG}"
+APP_DIR="build/Harbour Control.app"
+# Skip universal mode for faster local iteration: UNIVERSAL=0 ./build.sh
+UNIVERSAL="${UNIVERSAL:-1}"
 
-echo "==> swift build ($CONFIG)"
-swift build -c "$CONFIG" --product Harbour
-swift build -c "$CONFIG" --product harbour-daemon
+if [ "$UNIVERSAL" = "1" ]; then
+  ARCH_FLAGS=(--arch arm64 --arch x86_64)
+  # SPM capitalises the config name under apple/Products/ (Release, Debug).
+  CONFIG_CAPITALIZED="$(tr '[:lower:]' '[:upper:]' <<< "${CONFIG:0:1}")${CONFIG:1}"
+  BIN_DIR=".build/apple/Products/${CONFIG_CAPITALIZED}"
+else
+  ARCH_FLAGS=()
+  BIN_DIR=".build/${CONFIG}"
+fi
+
+echo "==> swift build ($CONFIG, arches: ${ARCH_FLAGS[*]:-host})"
+swift build -c "$CONFIG" "${ARCH_FLAGS[@]}" --product Harbour
+swift build -c "$CONFIG" "${ARCH_FLAGS[@]}" --product harbour-daemon
 
 echo "==> assembling $APP_DIR"
 rm -rf "$APP_DIR"

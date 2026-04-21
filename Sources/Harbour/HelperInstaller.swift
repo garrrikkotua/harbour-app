@@ -1,4 +1,5 @@
 import Foundation
+import HarbourCore
 
 enum HarbourError: LocalizedError {
     case missingDaemonBinary
@@ -45,12 +46,20 @@ enum HelperInstaller {
         let script = """
         #!/bin/bash
         set -e
+        # Clean Macs may not have /usr/local/bin yet. Create it before copying.
+        mkdir -p /usr/local/bin
         mkdir -p '\(stateDir)'
         install -m 755 -o root -g wheel '\(bundled.path)' '\(daemonPath)'
         install -m 644 -o root -g wheel '\(tempPlist.path)' '\(plistPath)'
+        # Bootout any previous daemon and wait until its process is gone — launchctl
+        # bootout returns when the job is removed, but the process can still be
+        # running cleanup. Poll until the pidfile/PID is really dead before we
+        # write new state.
         /bin/launchctl bootout system/\(label) 2>/dev/null || true
-        # Give any prior cleanup a moment to finish draining before we write new state.
-        sleep 1
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+          if ! pgrep -xf '\(daemonPath)' >/dev/null 2>&1; then break; fi
+          sleep 0.5
+        done
         trap 'rm -f \(stateFile)' EXIT
         install -m 644 -o root -g wheel '\(tempState.path)' '\(stateFile)'
         /bin/launchctl bootstrap system '\(plistPath)'
