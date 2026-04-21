@@ -19,4 +19,14 @@ struct BlockState: Codable {
     let domains: [String]
     let blockedPaths: [String]
     let blockedBundleIDs: [String]
+    /// Absolute path to the user-writable additions file the GUI appends to.
+    /// Optional for backwards compat — if nil, the daemon skips polling for additions.
+    var additionsPath: String? = nil
+}
+
+/// Additions made during an active block. Users can only grow the blocklist,
+/// never shrink it — so this file is strictly accumulative until the block ends.
+struct BlockAdditions: Codable {
+    var domains: [String] = []
+    var apps: [BlockedApp] = []
 }

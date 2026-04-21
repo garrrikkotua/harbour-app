@@ -568,56 +568,68 @@ struct HarbourSecondaryButtonStyle: ButtonStyle {
 struct ActiveView: View {
     @ObservedObject var manager: BlockManager
     @State private var showFAQ = false
+    @State private var showAppPicker = false
+    @State private var expanded = false
+    @State private var newDomain = ""
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Theme.activeBackground.ignoresSafeArea()
-
-            // Starfield
             StarfieldView().opacity(0.7)
 
-            VStack(spacing: 18) {
-                Spacer(minLength: 12)
+            ScrollView {
+                VStack(spacing: 18) {
+                    Spacer(minLength: 12)
 
-                LighthouseIcon(size: 128)
+                    LighthouseIcon(size: 128)
 
-                VStack(spacing: 4) {
-                    Text("Blocking")
-                        .font(Theme.serif(size: 30, weight: .bold))
+                    VStack(spacing: 4) {
+                        Text("Blocking")
+                            .font(Theme.serif(size: 30, weight: .bold))
+                            .foregroundStyle(Theme.parchmentWarm)
+                        Text("You're in a focused session.")
+                            .font(Theme.sans(size: 13))
+                            .foregroundStyle(Color.white.opacity(0.55))
+                    }
+
+                    Text(formatRemaining(manager.remainingSeconds))
+                        .font(Theme.serif(size: 56, weight: .semibold))
                         .foregroundStyle(Theme.parchmentWarm)
-                    Text("You're in a focused session.")
-                        .font(Theme.sans(size: 13))
-                        .foregroundStyle(Color.white.opacity(0.55))
-                }
+                        .monospacedDigit()
+                        .padding(.top, 4)
 
-                Text(formatRemaining(manager.remainingSeconds))
-                    .font(Theme.serif(size: 56, weight: .semibold))
-                    .foregroundStyle(Theme.parchmentWarm)
-                    .monospacedDigit()
+                    ProgressTrack(progress: progress)
+                        .frame(height: 6)
+                        .padding(.horizontal, 42)
+
+                    if let state = manager.currentState {
+                        HStack(spacing: 26) {
+                            ActiveStat(symbol: "globe",
+                                       text: "\(manager.effectiveDomains.count) \(manager.effectiveDomains.count == 1 ? "site" : "sites")")
+                            ActiveStat(symbol: "square.grid.2x2.fill",
+                                       text: "\(manager.effectiveApps.count) \(manager.effectiveApps.count == 1 ? "app" : "apps")")
+                        }
+                        .padding(.top, 6)
+
+                        Text("Ends \(formatEnds(state.endTime))")
+                            .font(Theme.sans(size: 12))
+                            .foregroundStyle(Color.white.opacity(0.45))
+                    }
+
+                    // Blocklist manager
+                    BlocklistSection(
+                        manager: manager,
+                        expanded: $expanded,
+                        newDomain: $newDomain,
+                        onAddApp: { showAppPicker = true }
+                    )
                     .padding(.top, 4)
 
-                ProgressTrack(progress: progress)
-                    .frame(height: 6)
-                    .padding(.horizontal, 42)
-
-                if let state = manager.currentState {
-                    HStack(spacing: 26) {
-                        ActiveStat(symbol: "globe",
-                                   text: "\(state.domains.count) \(state.domains.count == 1 ? "site" : "sites")")
-                        ActiveStat(symbol: "square.grid.2x2.fill",
-                                   text: "\(state.blockedPaths.count) \(state.blockedPaths.count == 1 ? "app" : "apps")")
-                    }
-                    .padding(.top, 6)
-
-                    Text("Ends \(formatEnds(state.endTime))")
-                        .font(Theme.sans(size: 12))
-                        .foregroundStyle(Color.white.opacity(0.45))
+                    Spacer(minLength: 18)
                 }
-
-                Spacer(minLength: 16)
+                .padding(.horizontal, 32)
+                .padding(.top, 24)
             }
-            .padding(.horizontal, 32)
-            .padding(.top, 24)
 
             Button {
                 showFAQ = true
@@ -629,8 +641,15 @@ struct ActiveView: View {
             .buttonStyle(.plain)
             .padding(14)
         }
-        .frame(width: 520, height: 580)
+        .frame(width: 520, height: 640)
         .sheet(isPresented: $showFAQ) { FAQView(onClose: { showFAQ = false }) }
+        .sheet(isPresented: $showAppPicker) {
+            AppPickerView(
+                alreadyAdded: Set(manager.effectiveApps.map(\.path)),
+                onPick: { manager.addAppLive($0) },
+                onCancel: { showAppPicker = false }
+            )
+        }
     }
 
     private var progress: Double {
@@ -650,6 +669,186 @@ struct ActiveView: View {
         let time = d.formatted(.dateTime.hour(.defaultDigits(amPM: .abbreviated)).minute())
         let date = d.formatted(.dateTime.day().month(.wide).year().locale(Locale(identifier: "en_US")))
         return "\(time) · \(date)"
+    }
+}
+
+// MARK: - Blocklist section (active block — can only add, never remove)
+
+private struct BlocklistSection: View {
+    @ObservedObject var manager: BlockManager
+    @Binding var expanded: Bool
+    @Binding var newDomain: String
+    let onAddApp: () -> Void
+
+    var body: some View {
+        VStack(spacing: 10) {
+            // Disclosure header
+            Button {
+                withAnimation(.easeInOut(duration: 0.22)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.white.opacity(0.5))
+                    Text("Manage blocklist")
+                        .font(Theme.sans(size: 12, weight: .semibold))
+                        .tracking(0.6)
+                        .foregroundStyle(Color.white.opacity(0.7))
+                    Spacer()
+                    Text("add only · no take-backs")
+                        .font(Theme.sans(size: 10))
+                        .foregroundStyle(Color.white.opacity(0.35))
+                }
+                .padding(.vertical, 8)
+                .padding(.horizontal, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color.white.opacity(0.06))
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                VStack(spacing: 10) {
+                    addControls
+                    listBody
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
+    private var addControls: some View {
+        HStack(spacing: 8) {
+            TextField("new-site.com", text: $newDomain)
+                .textFieldStyle(.plain)
+                .font(Theme.sans(size: 12))
+                .foregroundStyle(Theme.parchmentWarm)
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(Color.white.opacity(0.08))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 7)
+                                .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
+                        )
+                )
+                .onSubmit(addDomainAction)
+
+            Button("Add site", action: addDomainAction)
+                .buttonStyle(AddButtonStyle())
+                .disabled(newDomain.trimmingCharacters(in: .whitespaces).isEmpty)
+                .keyboardShortcut(.defaultAction)
+
+            Button(action: onAddApp) {
+                HStack(spacing: 4) {
+                    Image(systemName: "app.badge.fill")
+                    Text("Add app")
+                }
+            }
+            .buttonStyle(AddButtonStyle())
+        }
+    }
+
+    private func addDomainAction() {
+        manager.addDomainLive(newDomain)
+        newDomain = ""
+    }
+
+    private var listBody: some View {
+        VStack(spacing: 6) {
+            let domains = manager.effectiveDomains
+            let apps = manager.effectiveApps
+
+            if !domains.isEmpty {
+                VStack(spacing: 2) {
+                    ForEach(domains, id: \.self) { d in
+                        BlocklistRow(icon: .domain(d), label: d)
+                    }
+                }
+            }
+
+            if !apps.isEmpty {
+                VStack(spacing: 2) {
+                    ForEach(apps) { app in
+                        BlocklistRow(icon: .app(app.path), label: app.name)
+                    }
+                }
+            }
+
+            if domains.isEmpty && apps.isEmpty {
+                Text("Blocklist is empty.")
+                    .font(Theme.sans(size: 12))
+                    .foregroundStyle(Color.white.opacity(0.4))
+                    .padding(.vertical, 10)
+            }
+        }
+        .padding(.top, 2)
+    }
+}
+
+private enum BlocklistIcon {
+    case domain(String)
+    case app(String)
+}
+
+private struct BlocklistRow: View {
+    let icon: BlocklistIcon
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            iconView
+                .frame(width: 18, height: 18)
+            Text(label)
+                .font(Theme.sans(size: 12))
+                .foregroundStyle(Color.white.opacity(0.85))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer()
+            Image(systemName: "lock.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(Color.white.opacity(0.25))
+        }
+        .padding(.vertical, 5)
+        .padding(.horizontal, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.white.opacity(0.04))
+        )
+    }
+
+    @ViewBuilder
+    private var iconView: some View {
+        switch icon {
+        case .domain(let d):
+            FaviconView(domain: d, size: 18)
+        case .app(let path):
+            Image(nsImage: NSWorkspace.shared.icon(forFile: path))
+                .resizable().interpolation(.high)
+                .frame(width: 18, height: 18)
+        }
+    }
+}
+
+private struct AddButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(Theme.sans(size: 11, weight: .semibold))
+            .foregroundStyle(Theme.parchmentWarm)
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Color.white.opacity(configuration.isPressed ? 0.25 : 0.18))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7)
+                            .strokeBorder(Color.white.opacity(0.2), lineWidth: 0.5)
+                    )
+            )
+            .opacity(configuration.isPressed ? 0.85 : 1)
     }
 }
 

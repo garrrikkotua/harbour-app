@@ -106,6 +106,18 @@ struct BlockState: Codable {
     let domains: [String]
     let blockedPaths: [String]
     let blockedBundleIDs: [String]
+    var additionsPath: String? = nil
+}
+
+struct BlockedAppEntry: Codable {
+    let name: String
+    let path: String
+    let bundleID: String
+}
+
+struct BlockAdditions: Codable {
+    var domains: [String] = []
+    var apps: [BlockedAppEntry] = []
 }
 
 // MARK: - Helpers
@@ -663,6 +675,13 @@ func fullCleanup() {
     removePF()
     try? FileManager.default.removeItem(atPath: stateFile)
     try? FileManager.default.removeItem(atPath: plistPath)
+    // Clean up the user-writable additions file so it doesn't leak into the next block.
+    if let additionsPath = (try? Data(contentsOf: URL(fileURLWithPath: stateFile)))
+        .flatMap({ try? JSONDecoder().decode(BlockState.self, from: $0) })?
+        .additionsPath
+    {
+        try? FileManager.default.removeItem(atPath: additionsPath)
+    }
     // Best-effort bootout — if launchctl is missing or the job is already gone,
     // that's fine. We rely on KeepAlive.SuccessfulExit=false to prevent a loop.
     run("/bin/launchctl", ["bootout", "system/\(label)"], timeoutSec: 3)
@@ -708,22 +727,72 @@ if Date() >= state.endTime {
     exit(0)
 }
 
-applyHosts(domains: state.domains)
+// Effective enforcement sets — union of original state + runtime additions.
+// Users can only ever ADD during an active block; we never shrink these.
+var effectiveDomains: [String] = state.domains
+var effectivePaths: [String] = state.blockedPaths
+
+applyHosts(domains: effectiveDomains)
 log("block active: \(state.domains.count) domains, \(state.blockedPaths.count) apps, ends at \(state.endTime)")
-log("blocked paths: \(state.blockedPaths)")
+log("blocked paths: \(effectivePaths)")
 
 // pfctl setup can take ~100s because of serial DNS resolution. Run it on
 // a background thread so the app-kill loop starts enforcing immediately —
 // otherwise blocked apps stay alive during the first minute or two of a block.
 Thread.detachNewThread {
-    applyPF(domains: state.domains)
+    applyPF(domains: effectiveDomains)
+}
+
+// Additions file watcher — re-read every second by checking mtime. Cheap.
+var lastAdditionsMtime: TimeInterval = 0
+
+/// Merges runtime additions into effective sets. Returns true if anything changed.
+func reloadAdditionsIfChanged() -> Bool {
+    guard let additionsPath = state.additionsPath else { return false }
+    guard let attrs = try? FileManager.default.attributesOfItem(atPath: additionsPath),
+          let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970
+    else {
+        return false
+    }
+    if mtime == lastAdditionsMtime { return false }
+    lastAdditionsMtime = mtime
+
+    guard let data = try? Data(contentsOf: URL(fileURLWithPath: additionsPath)),
+          let adds = try? JSONDecoder().decode(BlockAdditions.self, from: data)
+    else {
+        return false
+    }
+
+    // Union: merge new domains and paths. Never remove.
+    let origDomainCount = effectiveDomains.count
+    let origPathCount = effectivePaths.count
+    var seenD = Set(effectiveDomains)
+    for d in adds.domains where seenD.insert(d).inserted {
+        effectiveDomains.append(d)
+    }
+    var seenP = Set(effectivePaths)
+    for a in adds.apps where seenP.insert(a.path).inserted {
+        effectivePaths.append(a.path)
+    }
+
+    let newD = effectiveDomains.count - origDomainCount
+    let newP = effectivePaths.count - origPathCount
+    log("additions: +\(newD) domains, +\(newP) apps (total: \(effectiveDomains.count)D/\(effectivePaths.count)A)")
+    return (newD + newP) > 0
 }
 
 // Re-apply hosts + pf periodically in case something overwrites them or IPs change
 var tick = 0
 while Date() < state.endTime && !terminationRequested {
-    killBlockedApps(paths: state.blockedPaths)
+    killBlockedApps(paths: effectivePaths)
     tick += 1
+
+    // Check additions file — cheap stat call, only triggers work on change.
+    if reloadAdditionsIfChanged() {
+        applyHosts(domains: effectiveDomains)
+        Thread.detachNewThread { applyPF(domains: effectiveDomains) }
+    }
+
     if tick % 10 == 0 {
         // Diagnostic: list any process whose path contains any target's
         // basename (e.g., "Telegram.app"), regardless of whether it matches
@@ -733,12 +802,12 @@ while Date() < state.endTime && !terminationRequested {
         var nearMiss: [String] = []
         for (pid, p) in procs {
             var hit = false
-            for t in state.blockedPaths where p.hasPrefix(t) {
+            for t in effectivePaths where p.hasPrefix(t) {
                 matchCount += 1; hit = true; break
             }
             if !hit {
-                for t in state.blockedPaths {
-                    let base = (t as NSString).lastPathComponent  // e.g., Telegram.app
+                for t in effectivePaths {
+                    let base = (t as NSString).lastPathComponent
                     if !base.isEmpty, p.localizedCaseInsensitiveContains(base) {
                         nearMiss.append("pid=\(pid) \(p)")
                         break
@@ -750,12 +819,12 @@ while Date() < state.endTime && !terminationRequested {
         for line in nearMiss { log("near-miss: \(line)") }
     }
     if tick % 30 == 0 {
-        applyHosts(domains: state.domains)
+        applyHosts(domains: effectiveDomains)
     }
     // Re-resolve + reload pf every 5 minutes on a background thread so the
     // kill loop keeps firing while DNS work is in flight.
     if tick % 300 == 0 {
-        Thread.detachNewThread { applyPF(domains: state.domains) }
+        Thread.detachNewThread { applyPF(domains: effectiveDomains) }
     }
     Thread.sleep(forTimeInterval: 1.0)
 }

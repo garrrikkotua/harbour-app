@@ -19,6 +19,7 @@ mkdir -p "$APP_DIR/Contents/Resources"
 cp "$BIN_DIR/Harbour"          "$APP_DIR/Contents/MacOS/Harbour"
 cp "$BIN_DIR/harbour-daemon"   "$APP_DIR/Contents/Resources/harbour-daemon"
 cp Resources/Info.plist        "$APP_DIR/Contents/Info.plist"
+cp Resources/AppIcon.icns      "$APP_DIR/Contents/Resources/AppIcon.icns"
 
 chmod +x "$APP_DIR/Contents/MacOS/Harbour"
 chmod +x "$APP_DIR/Contents/Resources/harbour-daemon"
