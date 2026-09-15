@@ -7,7 +7,7 @@ The existing bundle identifier `com.igor.harbour` is retained for compatibility.
 ## Local release
 
 1. Confirm `security find-identity -v -p codesigning` lists `Developer ID Application: Pairmind Limited (4Q6NYM988Y)`.
-2. Run `xcrun notarytool store-credentials harbour-release` interactively. Enter your Apple ID, an app-specific password, and team ID `4Q6NYM988Y`. Keep credentials in Keychain, never in the repository or chat.
+2. Run `xcrun notarytool store-credentials harbour-release` interactively. Use an App Store Connect API key with its key ID and issuer ID, or leave the key path blank to use your Apple ID, an app-specific password, and team ID `4Q6NYM988Y`. Keep credentials in Keychain, never in the repository or chat.
 3. Run:
 
 ```sh
@@ -37,6 +37,10 @@ Configure these **repository Actions secrets**:
 Export only the relevant signing identity from Keychain Access. Upload secrets through GitHub Settings → Secrets and variables → Actions, or `gh secret set` using stdin. Never commit the .p12 or credentials. The workflow uses a temporary signing keychain and deletes it on completion or failure.
 
 Push a version tag such as `v0.2.0` to publish. Manual dispatch accepts a version and creates a **draft** release at the selected commit. Missing secrets, failed tests, signing failures, rejected notarization, or failed Gatekeeper checks stop publication.
+
+## Repeatable live smoke test
+
+On a test Mac with the built app, run `sudo python3 scripts/smoke-test.py` for a 12-second app-only session. Add `--include-websites` for a second 35-second session that blocks example.com and verifies live firewall rules. The script refuses to run over an existing Harbour session, uses a disposable copy of `/bin/sleep` as the blocked app, checks normal timer cleanup, and writes logs under `build/`. Website tests can interrupt existing network connections. This does not cover GUI authorization or reboot recovery.
 
 ## Manual acceptance checks
 
