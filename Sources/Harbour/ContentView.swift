@@ -57,7 +57,7 @@ struct SetupView: View {
                     }
 
                     PrimaryButton(
-                        title: "Start block",
+                        title: manager.isStarting ? "Starting…" : "Start block",
                         enabled: canStart,
                         action: { showConfirm = true }
                     )
@@ -104,16 +104,18 @@ struct SetupView: View {
     }
 
     private var canStart: Bool {
-        manager.config.durationMinutes > 0
+        !manager.isStarting && (1...1440).contains(manager.config.durationMinutes)
             && !(manager.config.domains.isEmpty && manager.config.apps.isEmpty)
     }
 
     private func startBlock() {
-        do {
-            try manager.startBlock()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
+        Task {
+            do {
+                try await manager.startBlock()
+                errorMessage = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }
@@ -262,11 +264,8 @@ private struct DomainSection: View {
     }
 
     private func add() {
-        var d = newDomain.trimmingCharacters(in: .whitespaces).lowercased()
-        d = d.replacingOccurrences(of: "https://", with: "")
-        d = d.replacingOccurrences(of: "http://", with: "")
-        d = d.components(separatedBy: "/").first ?? d
-        guard !d.isEmpty, !manager.config.domains.contains(d) else { newDomain = ""; return }
+        guard let d = DomainValidation.normalizedDomain(newDomain) else { return }
+        guard DomainValidation.isSafeDomain(d), !manager.config.domains.contains(d) else { newDomain = ""; return }
         manager.config.domains.append(d)
         manager.saveConfig()
         newDomain = ""

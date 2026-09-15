@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 public enum DomainValidation {
     /// Host file marker strings. Kept here so domain validation can refuse to
@@ -14,21 +15,29 @@ public enum DomainValidation {
         if s.contains(hostsMarkerStart) || s.contains(hostsMarkerEnd) { return false }
         let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789.-")
         for ch in s.lowercased() where !allowed.contains(ch) { return false }
-        return true
+        return s.split(separator: ".", omittingEmptySubsequences: false).allSatisfy {
+            !$0.isEmpty && $0.count <= 63 && $0.first != "-" && $0.last != "-"
+        }
     }
 
-    /// Returns true if `s` looks like an IPv4 or IPv6 address (rough check
-    /// used to filter dig output before writing pfctl rules).
+    /// Accept a hostname or web URL, and consistently store only its hostname.
+    public static func normalizedDomain(_ input: String) -> String? {
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !text.isEmpty else { return nil }
+        let url = text.contains("://") ? text : "https://" + text
+        guard let parts = URLComponents(string: url),
+              ["http", "https"].contains(parts.scheme ?? ""),
+              parts.user == nil, parts.password == nil,
+              let host = parts.host, isSafeDomain(host) else { return nil }
+        return host
+    }
+
+    /// Parse addresses before inserting DNS output into firewall rules.
     public static func isValidIP(_ s: String) -> Bool {
-        if s.isEmpty || s.contains(" ") || s.hasSuffix(".") { return false }
-        // IPv4: four dot-separated numeric octets 0-255
-        let dotParts = s.split(separator: ".")
-        if dotParts.count == 4,
-           dotParts.allSatisfy({ Int($0).map { $0 >= 0 && $0 <= 255 } ?? false }) {
-            return true
+        var ipv4 = in_addr()
+        var ipv6 = in6_addr()
+        return s.withCString {
+            inet_pton(AF_INET, $0, &ipv4) == 1 || inet_pton(AF_INET6, $0, &ipv6) == 1
         }
-        // IPv6: rough check — at least one colon, no spaces
-        if s.contains(":") { return true }
-        return false
     }
 }

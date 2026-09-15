@@ -17,5 +17,12 @@ struct HarbourApp: App {
             .frame(width: 520)
         }
         .windowResizability(.contentSize)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    NSWorkspace.shared.open(URL(string: "https://github.com/garrrikkotua/harbour-app/releases/latest")!)
+                }
+            }
+        }
     }
 }

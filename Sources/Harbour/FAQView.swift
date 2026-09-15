@@ -27,8 +27,8 @@ struct FAQView: View {
             a: """
             Harbour Control uses two layers:
 
-            1. **/etc/hosts** — maps blocked domains to 127.0.0.1 so your DNS resolver drops them.
-            2. **pfctl (Packet Filter)** — macOS's built-in firewall. Harbour Control resolves each blocked domain's IP addresses and adds `block drop` rules so packets can't leave your machine, even over a VPN.
+            1. **/etc/hosts** — maps blocked domains to 0.0.0.0 so your DNS resolver drops them.
+            2. **pfctl (Packet Filter)** — macOS's built-in firewall. Harbour Control resolves each blocked domain's IP addresses and adds `block drop` rules so packets can't leave your machine, subject to the VPN’s routing and DNS behavior.
 
             IPs are re-resolved every 5 minutes to keep up with services that rotate them.
             """
@@ -44,7 +44,7 @@ struct FAQView: View {
         FAQItem(
             q: "Does it work with VPN?",
             a: """
-            Yes. `/etc/hosts` alone can be bypassed by VPNs that use their own DNS, but the `pfctl` packet filter runs on your host's network stack and drops packets regardless of where your DNS resolution happens.
+            Coverage depends on the VPN. Harbour combines local DNS entries with IP-based firewall rules, but proxies, tunneled traffic, and custom encrypted DNS can bypass these layers.
 
             If a site still loads, it's likely because the domain resolves to a new IP that Harbour Control hasn't seen yet. Harbour Control re-resolves every 5 minutes to catch this.
             """
@@ -70,11 +70,11 @@ struct FAQView: View {
             a: """
             - Block settings (domains, apps, default duration): `~/Library/Application Support/Harbour/config.json`
             - Active block state (start time, end time): `/var/db/harbour/state.json` (root-owned; removed when timer expires)
-            - Daemon binary: `/usr/local/bin/harbour-daemon`
+            - Daemon binary: `/Library/PrivilegedHelperTools/com.harbour.daemon`
             - launchd plist: `/Library/LaunchDaemons/com.harbour.daemon.plist`
             - Daemon log: `/var/log/harbour-daemon.log`
 
-            No data ever leaves your machine. Harbour Control doesn't phone home.
+            There is no analytics service. Website icons are fetched from Google’s favicon service, which receives the hostname. Enforcement also makes DNS queries. Local diagnostics may contain blocked domains and app paths.
             """
         ),
         FAQItem(
@@ -90,16 +90,9 @@ struct FAQView: View {
         FAQItem(
             q: "How do I uninstall Harbour Control?",
             a: """
-            When no block is active, simply drag `Harbour Control.app` to the Trash. The daemon only exists during a block and uninstalls itself automatically when the timer expires.
+            Wait until your block expires, then drag Harbour Control.app to the Trash. The background job and network rules are removed at expiry. An inactive helper executable and your settings may remain.
 
-            If you want to nuke a stuck install (only possible with `sudo`):
-
-            ```
-            sudo launchctl bootout system/com.harbour.daemon
-            sudo rm /Library/LaunchDaemons/com.harbour.daemon.plist
-            sudo rm /usr/local/bin/harbour-daemon
-            sudo rm -rf /var/db/harbour
-            ```
+            If a block malfunctions, an administrator can unload the background job with `sudo launchctl bootout system/com.harbour.daemon`. Let cleanup finish before deleting state. See the repository’s release guide for recovery details.
             """
         ),
     ]

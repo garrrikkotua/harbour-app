@@ -1,123 +1,88 @@
 name: Release
-
-# Triggers:
-#   - Pushing a tag that looks like v1.2.3 (standard SemVer)
-#   - Manual dispatch from the Actions tab
-#
-# Why tag-triggered and not every commit:
-#   - Desktop apps don't need a binary per commit — that's noise
-#   - Tags give clean version numbers for users to reference
-#   - Flow: merge features to main freely, run `git tag v0.2.0 && git push --tags`
-#     when you actually want a release
-
 on:
   push:
-    tags:
-      - 'v*.*.*'
+    tags: ['v*.*.*']
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (e.g. 0.2.0) — used only for manual dispatch'
+        description: 'Version x.y.z (creates a draft release for review)'
         required: true
-        default: '0.0.0'
-
 permissions:
-  contents: write  # needed by softprops/action-gh-release to create the release
-
+  contents: write
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  build:
-    name: Build Harbour.app
-    runs-on: macos-14   # Apple Silicon, has Xcode 15+
-    timeout-minutes: 20
-
+  release:
+    runs-on: macos-14
+    timeout-minutes: 90
+    env:
+      NOTARY_PROFILE: harbour-release
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app
-
-      - name: Show toolchain
-        run: |
-          xcodebuild -version
-          swift --version
-
-      - name: Determine version
+      - uses: actions/checkout@v4
+      - name: Validate version
         id: version
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-            echo "tag=v${{ inputs.version }}"     >> "$GITHUB_OUTPUT"
-          else
-            TAG="${GITHUB_REF#refs/tags/}"
-            echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
-            echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Run tests
-        run: swift test -c debug
-
-      - name: Build release (universal arm64 + x86_64)
-        run: ./build.sh
         env:
-          CONFIG: release
-          UNIVERSAL: "1"
-
-      - name: Verify bundle
+          MANUAL_VERSION: ${{ inputs.version }}
         run: |
-          ls -la "build/Harbour Control.app/Contents/MacOS/"
-          ls -la "build/Harbour Control.app/Contents/Resources/"
-          lipo -info "build/Harbour Control.app/Contents/MacOS/Harbour"
-          lipo -info "build/Harbour Control.app/Contents/Resources/harbour-daemon"
-          codesign -vv "build/Harbour Control.app" || true
-
-      - name: Create zip
+          VERSION="${MANUAL_VERSION:-${GITHUB_REF_NAME#v}}"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Test
+        run: swift test
+      - name: Configure signing and notarization
+        env:
+          CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
-          cd build
-          ditto -c -k --sequesterRsrc --keepParent "Harbour Control.app" "Harbour-Control-${{ steps.version.outputs.version }}.zip"
-          ls -la *.zip
-
-      - name: Create DMG
-        run: |
-          cd build
-          hdiutil create -volname "Harbour Control" \
-                         -srcfolder "Harbour Control.app" \
-                         -ov -format UDZO \
-                         "Harbour-Control-${{ steps.version.outputs.version }}.dmg"
-          ls -la *.dmg
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/harbour-signing.keychain-db"
+          for NAME in CERTIFICATE CERTIFICATE_PASSWORD SIGNING_IDENTITY APPLE_ID APPLE_TEAM_ID APPLE_APP_PASSWORD; do
+            [[ -n "${!NAME}" ]] || { echo "::error::Missing release secret: $NAME"; exit 1; }
+          done
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 7200 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN_PATH" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          xcrun notarytool store-credentials "$NOTARY_PROFILE" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
+      - name: Build, sign, notarize, and package
+        env:
+          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: ./scripts/package-release.sh
+      - uses: actions/upload-artifact@v4
         with:
-          name: Harbour-Control-${{ steps.version.outputs.version }}
-          path: |
-            build/*.zip
-            build/*.dmg
-          retention-days: 30
-
-      - name: Create GitHub Release
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+          name: Harbour-Control-${{ env.VERSION }}
+          path: build/release/*
+          if-no-files-found: error
+      - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          name: Harbour Control ${{ steps.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: Harbour Control ${{ env.VERSION }}
+          draft: ${{ github.event_name == 'workflow_dispatch' }}
           generate_release_notes: true
-          files: |
-            build/*.zip
-            build/*.dmg
+          fail_on_unmatched_files: true
+          files: build/release/*
           body: |
             ## Install
-
-            **Universal build** — runs on Apple Silicon (M1/M2/M3/M4) and Intel Macs.
-
-            1. Download the `.dmg` below
-            2. Open it and drag **Harbour Control.app** to your Applications folder
-            3. First launch: right-click the app → **Open** → **Open** (macOS Gatekeeper refuses unsigned apps otherwise). Or run once: `xattr -cr "/Applications/Harbour Control.app"`
-
-            ## Requirements
-
-            macOS 13 Ventura or later. Admin password needed once per block to install the background enforcer.
-
-            ## Changes
-
-            See commit history for this release below.
+            Download **Harbour-Control-latest.dmg**, open it, and drag **Harbour Control.app** into **Applications**.
+            Signed with Developer ID and notarized by Apple. Universal build for Apple Silicon and Intel, macOS 13 or later.
+            Administrator authorization is required to start a block. Active blocks last until their timer expires.
+            SHA-256 checksums are included in SHA256SUMS.txt.
+      - name: Remove signing credentials
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/harbour-signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/certificate.p12"

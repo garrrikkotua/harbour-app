@@ -65,8 +65,25 @@ final class DomainValidationTests: XCTestCase {
 
     func test_isSafeDomain_accepts253Chars() {
         // RFC 1035 says total name ≤ 253 chars
-        let at253 = String(repeating: "a", count: 253)
+        let at253 = Array(repeating: String(repeating: "a", count: 63), count: 3).joined(separator: ".") + "." + String(repeating: "a", count: 61)
         XCTAssertTrue(DomainValidation.isSafeDomain(at253))
+    }
+
+    func testRejectsMalformedLabelsAndAddresses() {
+        for input in ["-bad.com", "bad-.com", "bad..com", ".com", "example.com.", String(repeating: "a", count: 64) + ".com"] {
+            XCTAssertFalse(DomainValidation.isSafeDomain(input), input)
+        }
+        for input in ["not:an:ip", "::gg", "1::2::3", "1.2.3.4\n", "1.2.3.4/32"] {
+            XCTAssertFalse(DomainValidation.isValidIP(input), input)
+        }
+    }
+
+    func testNormalizesWebURLs() {
+        XCTAssertEqual(DomainValidation.normalizedDomain(" HTTPS://Example.COM:443/path?q=yes "), "example.com")
+        XCTAssertEqual(DomainValidation.normalizedDomain("example.com/path"), "example.com")
+        XCTAssertNil(DomainValidation.normalizedDomain("https://user:password@example.com"))
+        XCTAssertNil(DomainValidation.normalizedDomain("file:///etc/hosts"))
+        XCTAssertNil(DomainValidation.normalizedDomain("not a website"))
     }
 
     // MARK: isValidIP
