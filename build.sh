@@ -10,10 +10,10 @@ SIGNING_IDENTITY="${SIGNING_IDENTITY:--}"
 APP_DIR="build/Harbour Control.app"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'VERSION must be x.y.z' >&2; exit 1; }
 [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]] || { echo 'BUILD_NUMBER must be numeric' >&2; exit 1; }
-ARCH_FLAGS=()
-if [[ "$UNIVERSAL" == 1 ]]; then ARCH_FLAGS=(--arch arm64 --arch x86_64); fi
-swift build -c "$CONFIG" "${ARCH_FLAGS[@]}"
-BIN_DIR="$(swift build -c "$CONFIG" "${ARCH_FLAGS[@]}" --show-bin-path)"
+BUILD_FLAGS=(-c "$CONFIG")
+if [[ "$UNIVERSAL" == 1 ]]; then BUILD_FLAGS+=(--arch arm64 --arch x86_64); fi
+swift build "${BUILD_FLAGS[@]}"
+BIN_DIR="$(swift build "${BUILD_FLAGS[@]}" --show-bin-path)"
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$BIN_DIR/Harbour" "$APP_DIR/Contents/MacOS/Harbour"
