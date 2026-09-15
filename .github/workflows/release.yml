@@ -17,7 +17,6 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 90
     env:
-      KEYCHAIN_PATH: ${{ runner.temp }}/harbour-signing.keychain-db
       NOTARY_PROFILE: harbour-release
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +42,7 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/harbour-signing.keychain-db"
           for NAME in CERTIFICATE CERTIFICATE_PASSWORD SIGNING_IDENTITY APPLE_ID APPLE_TEAM_ID APPLE_APP_PASSWORD; do
             [[ -n "${!NAME}" ]] || { echo "::error::Missing release secret: $NAME"; exit 1; }
           done
@@ -84,5 +84,5 @@ jobs:
       - name: Remove signing credentials
         if: always()
         run: |
-          security delete-keychain "$KEYCHAIN_PATH" || true
+          security delete-keychain "$RUNNER_TEMP/harbour-signing.keychain-db" || true
           rm -f "$RUNNER_TEMP/certificate.p12"
