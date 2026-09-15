@@ -191,6 +191,7 @@ func log(_ msg: String) {
 // MARK: - Hosts file (marker handling in HarbourCore)
 
 func applyHosts(domains: [String]) {
+    guard !domains.isEmpty else { return }
     guard let hosts = try? String(contentsOfFile: hostsFile, encoding: .utf8) else {
         log("could not read hosts file")
         return
@@ -210,6 +211,7 @@ func applyHosts(domains: [String]) {
 
 func removeHosts() {
     guard let hosts = try? String(contentsOfFile: hostsFile, encoding: .utf8) else { return }
+    guard hosts.contains(markerStart) else { return }
     let cleaned = HostsMarker.removeBlockSection(from: hosts, start: markerStart, end: markerEnd)
     try? cleaned.write(toFile: hostsFile, atomically: true, encoding: .utf8)
     run("/usr/bin/dscacheutil", ["-flushcache"])
@@ -242,24 +244,19 @@ func resolveIPs(for domain: String) -> [String] {
 }
 
 /// Builds the pf anchor rules file. Mirrors SelfControl's format:
-/// options header, then `block return out proto tcp/udp from any to <IP>`
+/// options header, then `block return out quick proto tcp/udp from any to <IP>`
 /// for each IP (one TCP rule + one UDP rule).
 func writeAnchorFile(ips: Set<String>) {
-    var contents = """
-    # Options
-    set block-policy drop
-    set fingerprints "/etc/pf.os"
-    set ruleset-optimization basic
-    set skip on lo0
-
-    #
-    # org.harbour ruleset for Harbour blocks
-    #
-
-    """
+    var contents = "# Harbour website rules\n"
+    // Keep ordinary DNS (port 53) available, including on Macs configured
+    // to use Google/Cloudflare. Only encrypted resolver traffic is blocked.
+    for ip in alwaysBlockIPs {
+        contents += "block return out quick proto tcp from any to \(ip) port { 443, 853 }\n"
+        contents += "block return out quick proto udp from any to \(ip) port { 443, 853 }\n"
+    }
     for ip in ips.sorted() {
-        contents += "block return out proto tcp from any to \(ip)\n"
-        contents += "block return out proto udp from any to \(ip)\n"
+        contents += "block return out quick proto tcp from any to \(ip)\n"
+        contents += "block return out quick proto udp from any to \(ip)\n"
     }
     try? FileManager.default.createDirectory(
         atPath: "/etc/pf.anchors",
@@ -356,7 +353,8 @@ var accumulatedIPs = Set<String>()
 
 func applyPF(domains: [String]) {
     // Skip entirely for app-only blocks.
-    let candidates = (domains + alwaysBlockDomains).filter { DomainValidation.isSafeDomain($0) }
+    guard !domains.isEmpty else { return }
+    let candidates = domains.filter { DomainValidation.isSafeDomain($0) }
     guard !candidates.isEmpty else { return }
 
     // Do DNS resolution OUTSIDE the lock — it's slow (~100s) and we don't need
@@ -378,11 +376,6 @@ func applyPF(domains: [String]) {
             log("pf: \(d) matches \(suffix), added \(ranges.count) CIDR ranges")
         }
     }
-    alwaysBlockIPs.forEach { freshIPs.insert($0) }
-    guard !freshIPs.isEmpty else {
-        log("pf: no IPs resolved — skipping pfctl load")
-        return
-    }
 
     pfLock.lock()
     defer { pfLock.unlock() }
@@ -396,6 +389,7 @@ func applyPF(domains: [String]) {
     // Accumulate: never shrink the set, only grow. A CDN rotating to a new IP
     // keeps the old one covered too, so users don't see intermittent "works
     // for a minute then stops working" behaviour.
+    let newIPs = freshIPs.subtracting(accumulatedIPs)
     let before = accumulatedIPs.count
     accumulatedIPs.formUnion(freshIPs)
     let added = accumulatedIPs.count - before
@@ -405,15 +399,31 @@ func applyPF(domains: [String]) {
     ensurePFConfHasAnchor()
     pfConfModified = true
 
-    // First load: `-E -f ... -F states` to enable + install + flush states.
-    // Refresh: `-f ... -F states` — do NOT pass -E, it would leak a refcount.
+    // A crashed process may have left an enable reference. Release only that
+    // reference before acquiring ours; tokens do not survive a reboot.
+    if !pfLoaded,
+       let oldToken = try? String(contentsOfFile: pfTokenFile).trimmingCharacters(in: .whitespacesAndNewlines),
+       !oldToken.isEmpty, oldToken.allSatisfy({ $0.isNumber }) {
+        run("/sbin/pfctl", ["-X", oldToken], timeoutSec: 5)
+        try? FileManager.default.removeItem(atPath: pfTokenFile)
+    }
+    // Refresh only our anchor. Replacing the entire main ruleset every five
+    // minutes would disrupt unrelated firewall users and existing connections.
+    let isRefresh = pfLoaded
     let args: [String] = pfLoaded
-        ? ["-f", pfMainConf, "-F", "states"]
+        ? ["-a", pfAnchorName, "-f", pfAnchorFile]
         : ["-E", "-f", pfMainConf, "-F", "states"]
 
     let (rc, out) = run("/sbin/pfctl", args, timeoutSec: 10)
     log("pfctl \(args.joined(separator: " ")) => rc=\(rc) out=\(out.trimmingCharacters(in: .whitespacesAndNewlines))")
     if rc == 0 {
+        if isRefresh {
+            // New live additions must also stop connections already in PF's
+            // state table. Preserve connections to unrelated destinations.
+            for ip in newIPs.sorted() {
+                run("/sbin/pfctl", ["-k", ip.contains(":") ? "::/0" : "0.0.0.0/0", "-k", ip], timeoutSec: 2)
+            }
+        }
         if !pfLoaded {
             pfLoaded = true
             // Extract enable token so we can cleanly release our one reference.
@@ -438,32 +448,28 @@ func removePF() {
     pfLock.lock()
     pfShuttingDown = true
     let wasModified = pfConfModified
-    let wasLoaded = pfLoaded
     pfLock.unlock()
+
+    guard wasModified || FileManager.default.fileExists(atPath: pfAnchorFile)
+        || FileManager.default.fileExists(atPath: pfTokenFile)
+        || (try? String(contentsOfFile: pfMainConf))?.contains(pfConfMarkerStart) == true
+    else { return }
 
     // Always best-effort empty the anchor file and strip pf.conf if we ever
     // touched it — even if -E failed, stale anchor/load lines pointing to a
     // missing anchor file would make future pfctl runs crash.
     try? "".write(toFile: pfAnchorFile, atomically: true, encoding: .utf8)
-    if wasModified {
+    if wasModified || (try? String(contentsOfFile: pfMainConf))?.contains(pfConfMarkerStart) == true {
         stripPFConfAnchor()
     }
 
-    if wasLoaded {
-        // Release our enable reference.
-        if let token = try? String(contentsOfFile: pfTokenFile, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !token.isEmpty
-        {
-            // Preferred: `-X <token> -f /etc/pf.conf` releases our specific
-            // refcount without disabling PF for other users.
-            run("/sbin/pfctl", ["-X", token, "-f", pfMainConf], timeoutSec: 5)
-        } else {
-            // No token: we can't target our own refcount. `-d -f` disables PF
-            // entirely — matches SelfControl's fallback. A plain `-f` would
-            // leave our enable reference leaked forever.
-            run("/sbin/pfctl", ["-d", "-f", pfMainConf], timeoutSec: 5)
-        }
+    // Always clear the live anchor, including after a crash or reboot. Never
+    // disable the machine's entire firewall when our token is unavailable.
+    run("/sbin/pfctl", ["-a", pfAnchorName, "-F", "rules"], timeoutSec: 5)
+    if let token = try? String(contentsOfFile: pfTokenFile, encoding: .utf8)
+        .trimmingCharacters(in: .whitespacesAndNewlines),
+       !token.isEmpty, token.allSatisfy({ $0.isNumber }) {
+        run("/sbin/pfctl", ["-X", token], timeoutSec: 5)
     }
 
     try? FileManager.default.removeItem(atPath: pfAnchorFile)
@@ -562,7 +568,7 @@ func killBlockedApps(paths: [String]) {
             // Sanity: refuse to kill based on a critical target too.
             if isCriticalPath(target) { continue }
             // Match any process whose path is inside the .app bundle
-            if procPath.hasPrefix(target) {
+            if Safety.matchesApp(executable: procPath, bundlePath: target) {
                 if kill(pid, SIGKILL) == 0 {
                     log("killed pid=\(pid) path=\(procPath)")
                 }
@@ -589,16 +595,9 @@ func fullCleanup() {
     log("cleanup: removing hosts + pf rules + state")
     removeHosts()
     removePF()
-    // Read additionsPath BEFORE we delete state.json — otherwise the additions
-    // file leaks across blocks.
-    let additionsPath = (try? Data(contentsOf: URL(fileURLWithPath: stateFile)))
-        .flatMap { try? JSONDecoder().decode(BlockState.self, from: $0) }?
-        .additionsPath
     try? FileManager.default.removeItem(atPath: stateFile)
     try? FileManager.default.removeItem(atPath: plistPath)
-    if let p = additionsPath {
-        try? FileManager.default.removeItem(atPath: p)
-    }
+    // The GUI owns its additions file and removes it after observing expiry.
     // Best-effort bootout — if launchctl is missing or the job is already gone,
     // that's fine. We rely on KeepAlive.SuccessfulExit=false to prevent a loop.
     run("/bin/launchctl", ["bootout", "system/\(label)"], timeoutSec: 3)
@@ -646,8 +645,8 @@ if Date() >= state.endTime {
 
 // Effective enforcement sets — union of original state + runtime additions.
 // Users can only ever ADD during an active block; we never shrink these.
-var effectiveDomains: [String] = state.domains
-var effectivePaths: [String] = state.blockedPaths
+var effectiveDomains: [String] = state.domains.filter(DomainValidation.isSafeDomain)
+var effectivePaths: [String] = state.blockedPaths.filter(Safety.isBlockableAppPath)
 
 applyHosts(domains: effectiveDomains)
 log("block active: \(state.domains.count) domains, \(state.blockedPaths.count) apps, ends at \(state.endTime)")
@@ -656,9 +655,12 @@ log("blocked paths: \(effectivePaths)")
 // pfctl setup can take ~100s because of serial DNS resolution. Run it on
 // a background thread so the app-kill loop starts enforcing immediately —
 // otherwise blocked apps stay alive during the first minute or two of a block.
-Thread.detachNewThread {
-    applyPF(domains: effectiveDomains)
+let pfQueue = DispatchQueue(label: "com.harbour.pf")
+func schedulePF() {
+    let snapshot = effectiveDomains
+    pfQueue.async { applyPF(domains: snapshot) }
 }
+schedulePF()
 
 // Additions file watcher — re-read every second by checking mtime. Cheap.
 var lastAdditionsMtime: TimeInterval = 0
@@ -687,17 +689,26 @@ func reloadAdditionsIfChanged() -> Bool {
     let origDomainCount = effectiveDomains.count
     let origPathCount = effectivePaths.count
     var seenD = Set(effectiveDomains)
-    for d in adds.domains where seenD.insert(d).inserted {
+    for d in adds.domains where DomainValidation.isSafeDomain(d) && seenD.insert(d).inserted {
         effectiveDomains.append(d)
     }
     var seenP = Set(effectivePaths)
-    for a in adds.apps where seenP.insert(a.path).inserted {
+    for a in adds.apps where Safety.isBlockableAppPath(a.path) && seenP.insert(a.path).inserted {
         effectivePaths.append(a.path)
     }
 
     let newD = effectiveDomains.count - origDomainCount
     let newP = effectivePaths.count - origPathCount
     log("additions: +\(newD) domains, +\(newP) apps (total: \(effectiveDomains.count)D/\(effectivePaths.count)A)")
+    if newD + newP > 0 {
+        let persisted = BlockState(startTime: state.startTime, endTime: state.endTime,
+            domains: effectiveDomains, blockedPaths: effectivePaths,
+            blockedBundleIDs: effectivePaths.map { _ in "" }, additionsPath: state.additionsPath)
+        if let data = try? JSONEncoder().encode(persisted) {
+            do { try data.write(to: URL(fileURLWithPath: stateFile), options: .atomic) }
+            catch { log("could not persist additions: \(error)") }
+        }
+    }
     return (newD + newP) > 0
 }
 
@@ -710,7 +721,7 @@ while Date() < state.endTime && !terminationRequested {
     // Check additions file — cheap stat call, only triggers work on change.
     if reloadAdditionsIfChanged() {
         applyHosts(domains: effectiveDomains)
-        Thread.detachNewThread { applyPF(domains: effectiveDomains) }
+        schedulePF()
     }
 
     if tick % 10 == 0 {
@@ -744,7 +755,7 @@ while Date() < state.endTime && !terminationRequested {
     // Re-resolve + reload pf every 5 minutes on a background thread so the
     // kill loop keeps firing while DNS work is in flight.
     if tick % 300 == 0 {
-        Thread.detachNewThread { applyPF(domains: effectiveDomains) }
+        schedulePF()
     }
     Thread.sleep(forTimeInterval: 1.0)
 }

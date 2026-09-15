@@ -107,7 +107,7 @@ struct AppPickerView: View {
         }
     }
 
-    static func scanApps() -> [BlockedApp] {
+    nonisolated static func scanApps() -> [BlockedApp] {
         let homeApps = ("~/Applications" as NSString).expandingTildeInPath
         let roots = [
             "/Applications",
@@ -122,7 +122,7 @@ struct AppPickerView: View {
         return results.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    private static func collectApps(
+    nonisolated private static func collectApps(
         at dir: String,
         depth: Int,
         into results: inout [BlockedApp],

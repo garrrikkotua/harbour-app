@@ -26,6 +26,6 @@ jobs:
         run: swift test -c debug --parallel
 
       - name: Build debug (host arch only — fast sanity check)
-        run: swift build -c debug
+        run: CONFIG=debug ./build.sh
         env:
           UNIVERSAL: "0"

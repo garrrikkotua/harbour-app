@@ -16,7 +16,7 @@ enum HarbourError: LocalizedError {
 }
 
 enum HelperInstaller {
-    static let daemonPath = "/usr/local/bin/harbour-daemon"
+    static let daemonPath = "/Library/PrivilegedHelperTools/com.harbour.daemon"
     static let stateDir = "/var/db/harbour"
     static let stateFile = "/var/db/harbour/state.json"
     static let plistPath = "/Library/LaunchDaemons/com.harbour.daemon.plist"
@@ -28,29 +28,38 @@ enum HelperInstaller {
         }
 
         let stateData = try JSONEncoder().encode(state)
-        let tempDir = FileManager.default.temporaryDirectory
-        let tempState = tempDir.appendingPathComponent("cage-state.json")
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let tempState = tempDir.appendingPathComponent("state.json")
         try stateData.write(to: tempState)
 
         let tempPlist = tempDir.appendingPathComponent("com.harbour.daemon.plist")
         try plistContents().write(to: tempPlist, atomically: true, encoding: .utf8)
 
         // Sequence matters:
-        //   1. Install binary + plist (idempotent, no side-effects).
+        //   1. Serialize installation and reject an existing active job.
         //   2. Bootout any previous daemon and WAIT for it to exit — otherwise
         //      the old daemon could race us and delete the state.json we're
         //      about to write (expired-timer cleanup path).
-        //   3. Write state.json only after old daemon is gone.
+        //   3. Install binary, plist, and state only after the old daemon is gone.
         //   4. Bootstrap. If this fails, `trap` removes state.json so the GUI
         //      doesn't flip into "active" with no enforcer running.
         let script = """
         #!/bin/bash
-        set -e
-        # Clean Macs may not have /usr/local/bin yet. Create it before copying.
-        mkdir -p /usr/local/bin
-        mkdir -p '\(stateDir)'
-        install -m 755 -o root -g wheel '\(bundled.path)' '\(daemonPath)'
-        install -m 644 -o root -g wheel '\(tempPlist.path)' '\(plistPath)'
+        set -eu
+        export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+        # Serialize installers from multiple app windows/users.
+        mkdir /var/run/com.harbour.install.lock || { echo "Another installation is in progress" >&2; exit 1; }
+        trap 'rmdir /var/run/com.harbour.install.lock' EXIT
+        if /bin/launchctl print system/\(label) >/dev/null 2>&1 && [ -f '\(stateFile)' ]; then
+          echo "A block is already running. Wait for it to finish." >&2
+          exit 1
+        fi
+        # Keep the root helper outside user-writable Homebrew directories.
+        install -d -m 755 -o root -g wheel /Library/PrivilegedHelperTools
+        install -d -m 755 -o root -g wheel '\(stateDir)'
         # Bootout any previous daemon and wait until its process is gone — launchctl
         # bootout returns when the job is removed, but the process can still be
         # running cleanup. Poll until the pidfile/PID is really dead before we
@@ -60,17 +69,24 @@ enum HelperInstaller {
           if ! pgrep -xf '\(daemonPath)' >/dev/null 2>&1; then break; fi
           sleep 0.5
         done
-        trap 'rm -f \(stateFile)' EXIT
-        install -m 644 -o root -g wheel '\(tempState.path)' '\(stateFile)'
+        if pgrep -xf '\(daemonPath)' >/dev/null 2>&1; then
+          echo "Previous helper has not exited. Please retry." >&2
+          exit 1
+        fi
+        install -m 755 -o root -g wheel \(shellQuote(bundled.path)) '\(daemonPath)'
+        install -m 644 -o root -g wheel \(shellQuote(tempPlist.path)) '\(plistPath)'
+        trap 'rm -f \(stateFile); rmdir /var/run/com.harbour.install.lock' EXIT
+        install -m 644 -o root -g wheel \(shellQuote(tempState.path)) '\(stateFile)'
         /bin/launchctl bootstrap system '\(plistPath)'
+        rmdir /var/run/com.harbour.install.lock
         trap - EXIT
         """
 
-        let tempScript = tempDir.appendingPathComponent("cage-install.sh")
-        try script.write(to: tempScript, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tempScript.path)
+        try runAsAdmin(script: script)
+    }
 
-        try runAsAdmin(path: tempScript.path)
+    private static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
     }
 
     private static func plistContents() -> String {
@@ -103,20 +119,23 @@ enum HelperInstaller {
         """
     }
 
-    private static func runAsAdmin(path: String) throws {
-        let osa = """
-        do shell script "bash '\(path)'" with administrator privileges
-        """
+    private static func runAsAdmin(script: String) throws {
+        // Pass the script directly to osascript, avoiding a mutable on-disk
+        // shell script and escaping AppleScript independently of shell quoting.
+        let escaped = script.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+        let osa = "do shell script \"" + escaped + "\" with administrator privileges"
         let task = Process()
         task.launchPath = "/usr/bin/osascript"
         task.arguments = ["-e", osa]
         let errPipe = Pipe()
         task.standardError = errPipe
         try task.run()
+        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
 
         if task.terminationStatus != 0 {
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
             let errStr = String(data: errData, encoding: .utf8) ?? ""
             if errStr.contains("-128") || errStr.contains("User cancel") {
                 throw HarbourError.installCancelled

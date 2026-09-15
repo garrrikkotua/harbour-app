@@ -1,44 +1,35 @@
 #!/bin/bash
-# Build Harbour.app bundle containing both the GUI and the privileged daemon.
-# Produces a universal binary (arm64 + x86_64) that runs on any Mac from 2013 on.
+# Build an installable universal app; use UNIVERSAL=0 for local iteration.
 set -euo pipefail
 cd "$(dirname "$0")"
-
 CONFIG="${CONFIG:-release}"
-APP_DIR="build/Harbour Control.app"
-# Skip universal mode for faster local iteration: UNIVERSAL=0 ./build.sh
 UNIVERSAL="${UNIVERSAL:-1}"
-
-if [ "$UNIVERSAL" = "1" ]; then
-  ARCH_FLAGS=(--arch arm64 --arch x86_64)
-  # SPM capitalises the config name under apple/Products/ (Release, Debug).
-  CONFIG_CAPITALIZED="$(tr '[:lower:]' '[:upper:]' <<< "${CONFIG:0:1}")${CONFIG:1}"
-  BIN_DIR=".build/apple/Products/${CONFIG_CAPITALIZED}"
-else
-  ARCH_FLAGS=()
-  BIN_DIR=".build/${CONFIG}"
-fi
-
-echo "==> swift build ($CONFIG, arches: ${ARCH_FLAGS[*]:-host})"
-swift build -c "$CONFIG" "${ARCH_FLAGS[@]}" --product Harbour
-swift build -c "$CONFIG" "${ARCH_FLAGS[@]}" --product harbour-daemon
-
-echo "==> assembling $APP_DIR"
+VERSION="${VERSION:-0.2.0}"
+BUILD_NUMBER="${BUILD_NUMBER:-1}"
+SIGNING_IDENTITY="${SIGNING_IDENTITY:--}"
+APP_DIR="build/Harbour Control.app"
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'VERSION must be x.y.z' >&2; exit 1; }
+[[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]] || { echo 'BUILD_NUMBER must be numeric' >&2; exit 1; }
+ARCH_FLAGS=()
+if [[ "$UNIVERSAL" == 1 ]]; then ARCH_FLAGS=(--arch arm64 --arch x86_64); fi
+swift build -c "$CONFIG" "${ARCH_FLAGS[@]}"
+BIN_DIR="$(swift build -c "$CONFIG" "${ARCH_FLAGS[@]}" --show-bin-path)"
 rm -rf "$APP_DIR"
-mkdir -p "$APP_DIR/Contents/MacOS"
-mkdir -p "$APP_DIR/Contents/Resources"
-
-cp "$BIN_DIR/Harbour"          "$APP_DIR/Contents/MacOS/Harbour"
-cp "$BIN_DIR/harbour-daemon"   "$APP_DIR/Contents/Resources/harbour-daemon"
-cp Resources/Info.plist        "$APP_DIR/Contents/Info.plist"
-cp Resources/AppIcon.icns      "$APP_DIR/Contents/Resources/AppIcon.icns"
-
-chmod +x "$APP_DIR/Contents/MacOS/Harbour"
-chmod +x "$APP_DIR/Contents/Resources/harbour-daemon"
-
-echo "==> ad-hoc codesign"
-codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1 || true
-
-echo
-echo "Built: $APP_DIR"
-echo "Run:   open $APP_DIR"
+mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
+cp "$BIN_DIR/Harbour" "$APP_DIR/Contents/MacOS/Harbour"
+cp "$BIN_DIR/harbour-daemon" "$APP_DIR/Contents/Resources/harbour-daemon"
+cp Resources/Info.plist "$APP_DIR/Contents/Info.plist"
+cp Resources/AppIcon.icns "$APP_DIR/Contents/Resources/AppIcon.icns"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP_DIR/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP_DIR/Contents/Info.plist"
+SIGN_FLAGS=(--force --sign "$SIGNING_IDENTITY")
+if [[ "$SIGNING_IDENTITY" != - ]]; then SIGN_FLAGS+=(--options runtime --timestamp); fi
+# Sign nested code first, then seal the bundle. Never ignore signing failures.
+codesign "${SIGN_FLAGS[@]}" "$APP_DIR/Contents/Resources/harbour-daemon"
+codesign "${SIGN_FLAGS[@]}" "$APP_DIR"
+codesign --verify --deep --strict --verbose=2 "$APP_DIR"
+if [[ "$UNIVERSAL" == 1 ]]; then
+  lipo "$APP_DIR/Contents/MacOS/Harbour" -verify_arch arm64 x86_64
+  lipo "$APP_DIR/Contents/Resources/harbour-daemon" -verify_arch arm64 x86_64
+fi
+echo "Built: $APP_DIR ($VERSION, build $BUILD_NUMBER)"

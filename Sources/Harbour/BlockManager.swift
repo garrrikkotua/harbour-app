@@ -4,6 +4,7 @@ import HarbourCore
 
 @MainActor
 final class BlockManager: ObservableObject {
+    @Published var isStarting = false
     @Published var config = BlockConfig()
     @Published var currentState: BlockState?
     @Published var currentAdditions: BlockAdditions = BlockAdditions()
@@ -69,7 +70,7 @@ final class BlockManager: ObservableObject {
 
     func saveConfig() {
         guard let data = try? JSONEncoder().encode(config) else { return }
-        try? data.write(to: configURL)
+        try? data.write(to: configURL, options: .atomic)
     }
 
     func refreshState() {
@@ -88,7 +89,18 @@ final class BlockManager: ObservableObject {
         }
     }
 
-    func startBlock() throws {
+    func startBlock() async throws {
+        guard !isStarting else { return }
+        refreshState()
+        guard !isActive else { throw HarbourError.installFailed("A block is already running") }
+        guard (1...1440).contains(config.durationMinutes),
+              !(config.domains.isEmpty && config.apps.isEmpty),
+              config.domains.allSatisfy(DomainValidation.isSafeDomain),
+              config.apps.allSatisfy({ Safety.isBlockableAppPath($0.path) }) else {
+            throw HarbourError.installFailed("Choose valid websites and apps, and a duration between 1 minute and 24 hours")
+        }
+        isStarting = true
+        defer { isStarting = false }
         let now = Date()
         let end = now.addingTimeInterval(TimeInterval(config.durationMinutes * 60))
         let state = BlockState(
@@ -101,7 +113,9 @@ final class BlockManager: ObservableObject {
         )
         // Reset any stale additions from a prior block.
         try? FileManager.default.removeItem(at: additionsURL)
-        try HelperInstaller.installAndStart(state: state)
+        try await Task.detached(priority: .userInitiated) {
+            try HelperInstaller.installAndStart(state: state)
+        }.value
         refreshState()
     }
 
@@ -121,11 +135,8 @@ final class BlockManager: ObservableObject {
     /// Append a domain to the active blocklist. No-op if already covered.
     func addDomainLive(_ input: String) {
         guard currentState != nil else { return }
-        var d = input.trimmingCharacters(in: .whitespaces).lowercased()
-        d = d.replacingOccurrences(of: "https://", with: "")
-        d = d.replacingOccurrences(of: "http://", with: "")
-        d = d.components(separatedBy: "/").first ?? d
-        guard !d.isEmpty else { return }
+        guard let d = DomainValidation.normalizedDomain(input) else { return }
+        guard DomainValidation.isSafeDomain(d) else { return }
 
         let alreadyBlocked = (currentState?.domains.contains(d) ?? false)
             || currentAdditions.domains.contains(d)
@@ -138,7 +149,7 @@ final class BlockManager: ObservableObject {
 
     /// Append an app to the active blocklist. No-op if already covered.
     func addAppLive(_ app: BlockedApp) {
-        guard let state = currentState else { return }
+        guard let state = currentState, Safety.isBlockableAppPath(app.path) else { return }
         let already = state.blockedPaths.contains(app.path)
             || currentAdditions.apps.contains(where: { $0.path == app.path })
         guard !already else { return }

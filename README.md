@@ -1,203 +1,79 @@
 # Harbour Control
 
-> A native macOS app that blocks distracting websites **and apps** for up to 24 hours.
-> Once started, you can't cancel — you wait it out.
-
-<p align="center">
-  <img src="docs/screenshots/hero.png" width="520" alt="Harbour Control setup screen">
-</p>
-
-Inspired by [SelfControl](https://github.com/SelfControlApp/selfcontrol), but:
-
-- written in modern **Swift + SwiftUI** (not Objective-C/C)
-- also blocks **native Mac apps**, not just websites
-- survives VPNs and DoH-aware browsers (Arc, Firefox, Chrome) via packet-filter rules
-- ships with presets (Social Media, Video, News), real favicons, and a Spotlight-style app picker
-- lets you **add** to the blocklist mid-session — you just can't remove
-
----
-
-## Screens
-
-| Onboarding | Setup | Active |
-|:-:|:-:|:-:|
-| ![Onboarding](docs/screenshots/onboarding.png) | ![Setup](docs/screenshots/setup.png) | ![Active](docs/screenshots/active.png) |
-
----
+A native macOS focus app from Pairmind Limited. Block distracting websites and apps for 1 minute to 24 hours. The app has no early-cancel button; quitting the window does not end a block.
 
 ## Install
 
-### Direct download
+[Download from GitHub Releases](https://github.com/garrrikkotua/harbour-app/releases/latest).
 
-<p align="center">
-  <a href="https://github.com/garrrikkotua/harbour-app/releases/latest/download/Harbour-Control-latest.dmg"><b>⬇ Download the latest .dmg (universal — Apple Silicon + Intel)</b></a>
-  ·
-  <a href="https://github.com/garrrikkotua/harbour-app/releases/latest">All releases</a>
-</p>
+1. Download **Harbour-Control-latest.dmg** from a signed release.
+2. Open the disk image and drag **Harbour Control.app** onto **Applications**.
+3. Open the app from Applications and complete the introduction.
+4. Choose websites, apps, and a duration. Starting a block requires macOS administrator authorization.
 
-1. Download the `.dmg` above and open it
-2. Drag **Harbour Control.app** to your Applications folder
-3. **First launch:** right-click the app in Finder → **Open** → **Open** (macOS Gatekeeper refuses unsigned apps otherwise)
-4. Or, in one Terminal command: `xattr -cr "/Applications/Harbour Control.app"`
+**Requirements:** macOS 13 Ventura or later, Apple Silicon or Intel.
 
-**Requirements:** macOS 13 Ventura or later. Admin password needed once per block, to install the background enforcer.
+The new release workflow produces Developer ID-signed, Apple-notarized installers. Older v0.1.0 downloads are unsigned; they are not replaced until a new release is published. Build from source if no signed release is available yet.
 
-> **Heads up — unsigned app.** I don't currently pay for an Apple Developer ID ($99/year), so the build isn't notarized. Gatekeeper will warn you once; after that it launches normally. The source is in this repo — you can audit it, or [build from source](#build-from-source) if you'd rather not trust my binary.
+Use **Harbour Control → Check for Updates…** to open the latest GitHub release. Updates are installed manually when no block is active. Checksums are included with new releases in `SHA256SUMS.txt`.
 
-### Auto-updates
+## Features
 
-Not yet — v0.1 is manual: you'll need to check [Releases](https://github.com/garrrikkotua/harbour-app/releases) for new versions. Adding [Sparkle](https://sparkle-project.org/) (the standard macOS auto-updater) is on the roadmap; it needs an appcast feed and ideally a Developer ID signing cert to be trustworthy. Subscribe to this repo's releases on GitHub to get a notification when v0.2 ships (the "Watch" dropdown → "Custom" → Releases).
+- Website presets for social media, video, and news.
+- App picker with icons and protection for system recovery tools.
+- Hosts-file blocking plus IP rules in the macOS packet filter.
+- Background enforcement that resumes after reboot.
+- Add more websites and apps during a session; accepted additions persist across daemon restarts.
+- App-only sessions leave network configuration alone.
 
-### Uninstall
+## What to expect
 
-When no block is active, drag **Harbour Control.app** to the Trash. The daemon only exists during a block and uninstalls itself when the timer expires. To wipe a stuck install:
+Website blocking covers the domain you enter and its `www` variant. Add other subdomains explicitly or choose a preset. IP rules update every five minutes. Secure DNS endpoints are blocked during website sessions, while ordinary DNS on port 53 remains available.
 
-```sh
-sudo launchctl bootout system/com.harbour.daemon
-sudo rm /Library/LaunchDaemons/com.harbour.daemon.plist
-sudo rm /usr/local/bin/harbour-daemon
-sudo rm -rf /var/db/harbour
-```
+This is a focus tool, not a security boundary against an administrator. VPNs, proxies, custom encrypted DNS, and changing CDN addresses can affect coverage. Sites sharing a blocked IP may also be affected. Blocking a Meta service can affect other Meta services because their network ranges overlap. Firewall activation can interrupt existing network connections.
 
----
+Blocked apps are terminated approximately once a second. Save work before starting a block. System recovery tools are excluded. Moving or renaming an app can bypass path-based enforcement.
 
-## How it works
+## Privacy and storage
 
-Harbour Control stacks three layers of blocking, each designed to catch what the one above misses:
+Settings and runtime additions are stored in `~/Library/Application Support/Harbour/`. Active state is stored in `/var/db/harbour/state.json`. The helper is installed to `/Library/PrivilegedHelperTools/com.harbour.daemon`, with a launchd job at `/Library/LaunchDaemons/com.harbour.daemon.plist`.
 
-| Layer | What it blocks | Can be bypassed by |
-|---|---|---|
-| `/etc/hosts` (0.0.0.0 sink) | Standard OS DNS lookups | Browsers that aggressively use DoH |
-| `pfctl` packet filter rules | Outbound TCP/UDP to resolved IPs | New IPs the CDN rotates to mid-session |
-| App-process polling (libproc) | Launching/running blocked `.app` bundles | Processes below PID 100 (system critical — intentionally skipped) |
+Harbour has no analytics or account service. Website icons are requested from Google's favicon service, which receives the requested hostname. Website enforcement makes DNS queries; normal network providers can observe those. Diagnostics in `/var/log/harbour-daemon.log` can contain blocked domains and app paths.
 
-Whenever any block is active, Harbour Control also implicitly blocks the public DoH resolvers (Cloudflare, Google, Quad9, NextDNS, AdGuard, OpenDNS) at both DNS and IP level — so DoH-enabled browsers can't phone home for alternate DNS. For Meta services, Harbour Control blocks the full AS32934 IP range (21 CIDR blocks), so Facebook/Instagram/Threads stay blocked even if DNS rotates.
+## Uninstall
 
-### Architecture
+Wait until the block expires, then move the app to the Trash. The daemon removes the active state, launchd job, and its network rules at expiry. Its inactive helper executable may remain; it can be removed by an administrator. Settings can be removed from `~/Library/Application Support/Harbour/`.
 
-```
-Harbour Control.app/
-  Contents/
-    MacOS/Harbour              # SwiftUI GUI
-    Resources/harbour-daemon   # privileged enforcer, installed to /usr/local/bin on Start Block
-    Resources/AppIcon.icns     # lighthouse icon
-```
-
-On **Start Block**, the GUI:
-
-1. Writes `state.json` + a `launchd` plist to `/tmp`
-2. Runs an `osascript … with administrator privileges` shell script (one-time password prompt)
-3. Installs daemon → `/usr/local/bin/harbour-daemon`, plist → `/Library/LaunchDaemons/com.harbour.daemon.plist`, state → `/var/db/harbour/state.json`
-4. `launchctl bootstrap system …` starts the daemon
-
-The daemon:
-
-1. Reads state, appends an `# HARBOUR_BLOCK_START … END` section to `/etc/hosts`
-2. Launches an async thread to resolve every blocked domain via `dig` (including DoH endpoints)
-3. Writes `pfctl` rules to `/etc/pf.anchors/org.harbour`, appends a marker-delimited anchor to `/etc/pf.conf`, and runs `pfctl -E -f /etc/pf.conf -F states`
-4. Every 1s: enumerates all processes via `libproc.proc_listallpids` and `SIGKILL`s any whose path lives inside a blocked `.app` bundle
-5. Every 30s: re-asserts `/etc/hosts`
-6. Every 5min: re-resolves IPs and *accumulates* them into the pfctl ruleset (CDN-rotation proof)
-7. When `Date() >= endTime`: strips `/etc/hosts` section, empties anchor file, reverts `/etc/pf.conf`, releases pfctl's enable token (`pfctl -X <token>`), deletes plist, unloads self
-
-### What Harbour Control won't do
-
-- **Wildcard subdomains.** `/etc/hosts` is exact-match only. Blocking `youtube.com` won't catch `i.ytimg.com` — add the subdomain explicitly, or pick the Video preset which covers common ones.
-- **Block arbitrary IPs.** CDNs like Cloudflare serve thousands of sites from the same IPs. Blocking Cloudflare's whole AS would break the web.
-- **Kill system processes.** Finder, Dock, SystemUIServer, Terminal, System Settings, Activity Monitor, Console, Keychain Access are on a defence-in-depth safelist — even if their paths somehow landed in your blocklist, the daemon refuses to kill them.
-
----
+For a malfunction, see [recovery guidance](docs/RELEASING.md#recovery). Deleting state files while a block is active can prevent normal cleanup.
 
 ## Build from source
 
-Requires macOS 13+ and Xcode 15+ (for Swift 5.9+).
+Requires Xcode 15 or later with command-line tools selected:
 
 ```sh
 git clone https://github.com/garrrikkotua/harbour-app.git
 cd harbour-app
+swift test
 ./build.sh
 open "build/Harbour Control.app"
 ```
 
-`build.sh` uses Swift Package Manager to produce two universal (arm64 + x86_64) executables:
+`build.sh` produces a universal app in `build/Harbour Control.app`. Local builds use ad-hoc signing unless `SIGNING_IDENTITY` is supplied. Use `UNIVERSAL=0 ./build.sh` for faster local iteration.
 
-- `Harbour` — SwiftUI GUI (`Sources/Harbour/`)
-- `harbour-daemon` — root enforcer (`Sources/HarbourDaemon/`)
-
-…assembled into `build/Harbour Control.app` with ad-hoc codesigning. No Xcode project needed.
-
-To run the tests:
-
-```sh
-swift test
+```text
+Sources/Harbour/         SwiftUI app and helper installation
+Sources/HarbourCore/     Shared models, validation, presets, safety rules
+Sources/HarbourDaemon/   Hosts, packet-filter, and app enforcement
+Tests/HarbourCoreTests/  Shared-logic regression tests
+scripts/                Signed release packaging
 ```
 
-### Project layout
+## Signed GitHub releases
 
-```
-Sources/
-  HarbourCore/                # Pure-logic library (shared with daemon + tests)
-    DomainValidation.swift    # isSafeDomain / isValidIP
-    HostsMarker.swift         # /etc/hosts section building + stripping
-    Models.swift              # BlockState, BlockAdditions, BlockedApp
-    Presets.swift             # Social / Video / News
-    Safety.swift              # Critical-app safelist + risky-domain warnings
+See [release setup and acceptance checks](docs/RELEASING.md) for Pairmind Limited signing, notarization, and the required GitHub secrets. Tags such as `v0.2.0` trigger publication; manual workflow runs create draft releases. The pipeline refuses to publish if signing or notarization fails.
 
-  Harbour/                    # SwiftUI GUI
-    HarbourApp.swift          # @main entry, first-run → onboarding
-    ContentView.swift         # Setup + Active screens
-    OnboardingView.swift      # 4-step first-run intro
-    AppPickerView.swift       # Spotlight-style app grid
-    BlockManager.swift        # Config persistence, state polling
-    HelperInstaller.swift     # Privileged install shell script
-    FAQView.swift             # In-app help
-    ConfirmView.swift         # Pre-block confirmation
-    Theme.swift               # Navy + parchment design system
-    FaviconView.swift         # Favicons via Google s2
-    HarbourIcons.swift        # Custom lighthouse / ship's wheel
-
-  HarbourDaemon/              # Root enforcer
-    main.swift                # hosts, pfctl, libproc kill loop
-
-Tests/
-  HarbourCoreTests/           # Unit tests for shared logic (52 tests)
-```
-
----
-
-## Releases
-
-Releases are **tag-triggered**, not per-commit. To cut a release:
-
-```sh
-git tag v0.2.0
-git push --tags
-```
-
-GitHub Actions (see `.github/workflows/release.yml`) then:
-1. Builds `Harbour.app`
-2. Creates a `.zip` and `.dmg`
-3. Publishes a GitHub Release with both attached and auto-generated changelog
-
-You can also trigger a build manually from the Actions tab (**workflow_dispatch**).
-
----
-
-## Contributing
-
-PRs welcome — small and focused preferred. Please:
-- keep the SwiftUI code SwiftUI, not AppKit where avoidable
-- run a 5-minute block locally before opening a PR that touches the daemon
-- don't add features to the "can't cancel" escape hatch — defeating the point
-
----
+Automated tests and universal builds do not replace testing installation, block expiry, and reboot recovery on real Macs.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
-
-## Acknowledgements
-
-- [SelfControl](https://github.com/SelfControlApp/selfcontrol) for the `/etc/hosts` + `pfctl` approach and the Meta IP range list
-- Apple's New York serif for display typography
-- [Fraunces](https://fonts.google.com/specimen/Fraunces) for design inspiration
+MIT. See [LICENSE](LICENSE). Inspired by [SelfControl](https://github.com/SelfControlApp/selfcontrol).

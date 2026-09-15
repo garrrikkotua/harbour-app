@@ -40,6 +40,19 @@ public enum Safety {
         return false
     }
 
+    /// Only absolute, normalized app bundle paths may reach the root enforcer.
+    public static func isBlockableAppPath(_ path: String) -> Bool {
+        guard path.hasPrefix("/"), path.hasSuffix(".app"),
+              !path.contains("\n"), !path.contains("\r"),
+              (path as NSString).standardizingPath == path,
+              !isCriticalApp(path: path) else { return false }
+        return !criticalAppPaths.contains { path.hasPrefix($0 + "/") }
+    }
+
+    public static func matchesApp(executable: String, bundlePath: String) -> Bool {
+        isBlockableAppPath(bundlePath) && executable.hasPrefix(bundlePath + "/")
+    }
+
     /// Domains that commonly break system functionality when blocked.
     /// Not forbidden — we just warn the user.
     public static let riskyDomains: Set<String> = [

@@ -62,3 +62,17 @@ final class SafetyTests: XCTestCase {
         XCTAssertTrue(Safety.riskyEntries(from: []).isEmpty)
     }
 }
+
+final class EnforcementPathTests: XCTestCase {
+    func testRejectsBroadAndNonCanonicalTargets() {
+        for path in ["", "/", "/Applications", "Slack.app", "/Applications/../System/Applications/Utilities/Terminal.app", "/Applications/Test.app/", "/System/Applications/Utilities/Activity Monitor.app"] {
+            XCTAssertFalse(Safety.isBlockableAppPath(path), path)
+        }
+    }
+
+    func testBundleBoundaryIsRequired() {
+        XCTAssertTrue(Safety.matchesApp(executable: "/Applications/Slack.app/Contents/MacOS/Slack", bundlePath: "/Applications/Slack.app"))
+        XCTAssertFalse(Safety.matchesApp(executable: "/Applications/Slack.app.backup/Contents/MacOS/Slack", bundlePath: "/Applications/Slack.app"))
+        XCTAssertFalse(Safety.matchesApp(executable: "/sbin/launchd", bundlePath: "/"))
+    }
+}
