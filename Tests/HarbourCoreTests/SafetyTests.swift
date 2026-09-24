@@ -75,4 +75,13 @@ final class EnforcementPathTests: XCTestCase {
         XCTAssertFalse(Safety.matchesApp(executable: "/Applications/Slack.app.backup/Contents/MacOS/Slack", bundlePath: "/Applications/Slack.app"))
         XCTAssertFalse(Safety.matchesApp(executable: "/sbin/launchd", bundlePath: "/"))
     }
+
+    func testSharedNetworksDetectsGoogleAndMeta() {
+        let found = Safety.sharedNetworks(in: ["mail.google.com", "Instagram.com", "example.com"])
+        XCTAssertEqual(found.map(\.owner), ["Google", "Meta"])
+    }
+
+    func testSharedNetworksIgnoresLookalikes() {
+        XCTAssertTrue(Safety.sharedNetworks(in: ["notgoogle.com", "example.org"]).isEmpty)
+    }
 }

@@ -17,10 +17,13 @@ struct AppPickerView: View {
     let onCancel: () -> Void
 
     @State private var allApps: [AppEntry] = []
+    @State private var loaded = false
     @State private var search = ""
+    /// Picked in this sheet — shown as added right away, before the parent re-renders.
+    @State private var picked: Set<String> = []
     @FocusState private var searchFocused: Bool
 
-    private let columns = [GridItem(.adaptive(minimum: 96, maximum: 120), spacing: 12)]
+    private let columns = [GridItem(.adaptive(minimum: 100, maximum: 120), spacing: 8)]
 
     private var filtered: [AppEntry] {
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
@@ -30,29 +33,67 @@ struct AppPickerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search apps", text: $search)
-                    .textFieldStyle(.plain)
-                    .focused($searchFocused)
-                if !search.isEmpty {
-                    Button { search = "" } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
+            // Title + search
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Add apps")
+                        .font(Theme.serif(size: 20, weight: .bold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Spacer()
+                    Text("Blocked apps close within a second of opening.")
+                        .font(Theme.sans(size: 11))
+                        .foregroundStyle(Theme.textTertiary)
                 }
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(searchFocused ? Theme.amber : Theme.textTertiary)
+                    TextField("Search apps", text: $search)
+                        .textFieldStyle(.plain)
+                        .font(Theme.sans(size: 13))
+                        .foregroundStyle(Theme.textPrimary)
+                        .focused($searchFocused)
+                    if !search.isEmpty {
+                        Button { search = "" } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.textTertiary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear search")
+                    }
+                }
+                .padding(.horizontal, 10)
+                .frame(height: 32)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                        .fill(Color.white)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                                .strokeBorder(searchFocused ? Theme.amber.opacity(0.75) : Theme.creamBorder,
+                                              lineWidth: searchFocused ? 1.5 : 1)
+                        )
+                )
+                .animation(.easeOut(duration: 0.15), value: searchFocused)
             }
-            .padding(10)
-            .background(Color(nsColor: .textBackgroundColor))
-            .overlay(Rectangle().frame(height: 1).foregroundStyle(.separator), alignment: .bottom)
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+            .padding(.bottom, 12)
+            .background(Theme.parchmentWarm)
+            .overlay(alignment: .bottom) { Rectangle().fill(Theme.creamBorderSoft).frame(height: 1) }
 
-            if allApps.isEmpty {
+            if !loaded {
                 Spacer()
-                ProgressView("Loading apps…").controlSize(.small)
+                ProgressView("Looking for apps…").controlSize(.small)
+                    .foregroundStyle(Theme.textSecondary)
                 Spacer()
             } else if filtered.isEmpty {
                 Spacer()
-                Text("No apps match").foregroundStyle(.secondary)
+                VStack(spacing: 6) {
+                    Image(systemName: "square.dashed")
+                        .font(.system(size: 22))
+                        .foregroundStyle(Theme.textTertiary)
+                    Text(allApps.isEmpty ? "No apps found in /Applications" : "No apps match “\(search)”")
+                        .font(Theme.sans(size: 12))
+                        .foregroundStyle(Theme.textSecondary)
+                }
                 Spacer()
             } else {
                 ScrollView {
@@ -60,26 +101,40 @@ struct AppPickerView: View {
                         ForEach(filtered) { entry in
                             AppTile(
                                 entry: entry,
-                                isAdded: alreadyAdded.contains(entry.app.path),
-                                action: { onPick(entry.app) }
+                                isAdded: alreadyAdded.contains(entry.app.path) || picked.contains(entry.app.path),
+                                action: {
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                        _ = picked.insert(entry.app.path)
+                                    }
+                                    onPick(entry.app)
+                                }
                             )
                         }
                     }
-                    .padding(12)
+                    .padding(14)
                 }
             }
 
-            Divider()
             HStack {
-                Text("\(filtered.count) of \(allApps.count) apps")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text(loaded ? "\(filtered.count) of \(allApps.count) apps" : " ")
+                    .font(Theme.sans(size: 11)).foregroundStyle(Theme.textTertiary)
+                    .monospacedDigit()
                 Spacer()
+                // Picks apply immediately, so Done commits the sheet. Esc only:
+                // Return belongs to the search field.
                 Button("Done", action: onCancel)
+                    .buttonStyle(HarbourCompactPrimaryButtonStyle())
                     .keyboardShortcut(.cancelAction)
             }
-            .padding(10)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Theme.parchmentWarm)
+            .overlay(alignment: .top) { Rectangle().fill(Theme.creamBorderSoft).frame(height: 1) }
         }
-        .frame(width: 560, height: 480)
+        // ~32 pt narrower than the 520 pt window so the sheet never overhangs it.
+        .frame(width: 488, height: 480)
+        .background(Theme.parchment)
+        .environment(\.colorScheme, .light)
         .onAppear {
             loadApps()
             searchFocused = true
@@ -103,7 +158,10 @@ struct AppPickerView: View {
                 sized.unlockFocus()
                 return AppEntry(app: app, icon: sized)
             }
-            await MainActor.run { self.allApps = entries }
+            await MainActor.run {
+                self.allApps = entries
+                self.loaded = true
+            }
         }
     }
 
@@ -164,33 +222,40 @@ struct AppTile: View {
             VStack(spacing: 6) {
                 ZStack(alignment: .topTrailing) {
                     Image(nsImage: entry.icon)
-                        .interpolation(.none)
+                        .interpolation(.high)
                         .opacity(isAdded ? 0.45 : 1.0)
+                        .scaleEffect(hovering && !isAdded ? 1.06 : 1)
                     if isAdded {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.system(size: 16))
-                            .foregroundStyle(.white, .green)
+                            .foregroundStyle(.white, Theme.amber)
                             .offset(x: 4, y: -4)
+                            .transition(.scale(scale: 0.4).combined(with: .opacity))
                     }
                 }
                 .frame(width: 56, height: 56)
                 Text(entry.app.name)
-                    .font(.caption)
+                    .font(Theme.sans(size: 11))
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
-                    .foregroundStyle(isAdded ? .secondary : .primary)
+                    .foregroundStyle(isAdded ? Theme.textTertiary : Theme.textPrimary)
+                    // Fixed label box: one- and two-line names keep icons on one baseline.
+                    .frame(height: 28, alignment: .top)
             }
-            .frame(width: 96, height: 92)
+            .frame(width: 96, height: 92, alignment: .top)
             .padding(6)
             .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(hovering ? Color.secondary.opacity(0.15) : Color.clear)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(hovering && !isAdded ? Color.white : Color.clear)
+                    .shadow(color: Theme.navy.opacity(hovering && !isAdded ? 0.08 : 0), radius: 6, y: 2)
             )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(isAdded)
         .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.15), value: hovering)
         .help(isAdded ? "Already added" : entry.app.path)
+        .accessibilityLabel(isAdded ? "\(entry.app.name), added" : "Add \(entry.app.name)")
     }
 }

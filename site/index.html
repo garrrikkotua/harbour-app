@@ -10,8 +10,16 @@
 <meta property="og:title" content="Harbour Control: a focus app for Mac with no off switch">
 <meta property="og:description" content="Block distracting websites and apps until the timer ends. Free, open source, notarized by Apple.">
 <meta property="og:url" content="https://garrrikkotua.github.io/harbour-app/">
-<meta property="og:image" content="https://garrrikkotua.github.io/harbour-app/assets/og.png">
+<meta property="og:site_name" content="Harbour Control">
+<meta property="og:image" content="https://garrrikkotua.github.io/harbour-app/assets/og.png?v=2">
+<meta property="og:image:width" content="2400">
+<meta property="og:image:height" content="1260">
+<meta property="og:image:alt" content="Harbour Control: a lighthouse at night beside the words Drop anchor. Get to work.">
 <meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Harbour Control: a focus app for Mac with no off switch">
+<meta name="twitter:description" content="Block distracting websites and apps until the timer ends. Free, open source, notarized by Apple.">
+<meta name="twitter:image" content="https://garrrikkotua.github.io/harbour-app/assets/og.png?v=2">
+<meta name="twitter:image:alt" content="Harbour Control: a lighthouse at night beside the words Drop anchor. Get to work.">
 <meta name="theme-color" content="#111c30">
 <link rel="icon" type="image/png" href="assets/favicon.png">
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
@@ -457,7 +465,7 @@ footer a:hover { color: var(--parchment-warm); }
         <article class="card reveal">
           <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg></div>
           <h3>Websites, blocked everywhere</h3>
-          <p>The block covers every browser. Harbour Control rewrites the hosts file and adds firewall rules at the IP level, so switching to another browser won't get you through.</p>
+          <p>The block covers every browser. Pick a preset like Social Media or Video, or type any domain. Harbour Control rewrites the hosts file and adds firewall rules at the IP level, so switching browsers won't get you through.</p>
         </article>
         <article class="card reveal">
           <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><path d="M14 14l6 6M20 14l-6 6" stroke-linecap="round"/></svg></div>
@@ -470,9 +478,9 @@ footer a:hover { color: var(--parchment-warm); }
           <p>A root daemon enforces the block, not the app window. It survives quitting, logging out and rebooting, and resumes exactly where it left off.</p>
         </article>
         <article class="card reveal">
-          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h7"/><path d="M18 14v6M15 17h6"/></svg></div>
-          <h3>Presets in one click</h3>
-          <p>Social Media, Video &amp; Streaming, News &amp; Forums. The presets include the CDN and API domains that a simple list of hostnames tends to miss.</p>
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="3.5" width="18" height="4" rx="1.2"/><path d="M11 10.5h2l.8 10h-3.6z" fill="currentColor" stroke="none"/><circle cx="12" cy="5.5" r="1" fill="currentColor" stroke="none"/></svg></div>
+          <h3>A lighthouse in your menu bar</h3>
+          <p>The lamp lights up while a block runs, with the time left right beside it. Click it to see what's blocked and how long until the harbour opens.</p>
         </article>
         <article class="card reveal">
           <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div>
@@ -554,7 +562,7 @@ footer a:hover { color: var(--parchment-warm); }
       </div>
       <div class="faq">
         <details><summary>Is it really free?</summary><p>Yes. Harbour Control is free and MIT licensed. There's no trial, no Pro tier and no account. It's a side project that gets updated now and then.</p></details>
-        <details><summary>Can I stop a block early?</summary><p>Not from the app. That's the whole idea. Quitting, restarting or deleting the app won't end a session. For a real malfunction, an administrator can unload the daemon with <code>sudo launchctl bootout system/com.harbour.daemon</code>. The <a href="https://github.com/garrrikkotua/harbour-app/blob/main/docs/RELEASING.md#recovery">recovery guide</a> covers the details.</p></details>
+        <details><summary>Can I stop a block early?</summary><p>No. That's the whole idea. Quitting, restarting or deleting the app won't end a session, and the block comes back after a reboot. If something is genuinely broken, an administrator can remove it from Terminal. The <a href="https://github.com/garrrikkotua/harbour-app/blob/main/docs/RELEASING.md#recovery">recovery guide</a> has the exact steps. It takes deliberate effort, and it's meant for malfunctions, not for a weak moment.</p></details>
         <details><summary>Why does it need my admin password?</summary><p>Blocking every browser means editing <code>/etc/hosts</code>, adding firewall rules and installing a small background helper, and all of these need administrator rights. The password goes to macOS's own authorization prompt. Harbour Control never sees or stores it.</p></details>
         <details><summary>Will blocked apps lose my unsaved work?</summary><p>Blocked apps are closed about once a second while a session runs, so save your work in them before you start. System recovery tools are never blocked.</p></details>
         <details><summary>Which Macs does it support?</summary><p>macOS 13 Ventura or later, on both Apple Silicon and Intel. The download is a single universal app.</p></details>
@@ -582,7 +590,7 @@ footer a:hover { color: var(--parchment-warm); }
 
 <footer>
   <div class="wrap">
-    <span>© 2026 Pairmind Limited · MIT License</span>
+    <span>© 2026 Igor Kotua · MIT License</span>
     <span><a href="https://github.com/garrrikkotua/harbour-app">GitHub</a> · <a href="https://github.com/garrrikkotua/harbour-app/issues">Report an issue</a> · <a href="https://github.com/garrrikkotua/harbour-app/releases">Releases</a></span>
   </div>
 </footer>

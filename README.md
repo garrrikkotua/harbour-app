@@ -1,6 +1,6 @@
 # Harbour Control
 
-A free, open-source macOS focus app from Pairmind Limited. Block distracting websites and apps for 1 minute to 24 hours. The app has no early-cancel button; quitting the window does not end a block.
+A free, open-source macOS focus app by Igor Kotua. Block distracting websites and apps for 1 minute to 24 hours. The app has no early-cancel button; quitting the window does not end a block.
 
 **Website:** [garrrikkotua.github.io/harbour-app](https://garrrikkotua.github.io/harbour-app/) · **Download:** [Harbour-Control-latest.dmg](https://github.com/garrrikkotua/harbour-app/releases/latest/download/Harbour-Control-latest.dmg)
 

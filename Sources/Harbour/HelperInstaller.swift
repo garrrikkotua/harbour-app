@@ -50,7 +50,12 @@ enum HelperInstaller {
         #!/bin/bash
         set -eu
         export PATH=/usr/bin:/bin:/usr/sbin:/sbin
-        # Serialize installers from multiple app windows/users.
+        # Serialize installers from multiple app windows/users. An install
+        # takes seconds; a lock older than 10 minutes was left by a killed
+        # installer (no EXIT trap ran) and would block every start until reboot.
+        if [ -n "$(find /var/run/com.harbour.install.lock -maxdepth 0 -type d -mmin +10 2>/dev/null)" ]; then
+          rmdir /var/run/com.harbour.install.lock 2>/dev/null || true
+        fi
         mkdir /var/run/com.harbour.install.lock || { echo "Another installation is in progress" >&2; exit 1; }
         trap 'rmdir /var/run/com.harbour.install.lock' EXIT
         if /bin/launchctl print system/\(label) >/dev/null 2>&1 && [ -f '\(stateFile)' ]; then
@@ -96,6 +101,10 @@ enum HelperInstaller {
         // 1-Hz restart loop if bootout races with startup.
         //
         // ThrottleInterval caps respawn rate at 1 per 10s as a further backstop.
+        //
+        // On SIGTERM (bootout, or any restart/shutdown) the daemon lifts its
+        // network rules but keeps state.json and this plist, and exits
+        // non-zero, so RunAtLoad resumes the block after a reboot.
         """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

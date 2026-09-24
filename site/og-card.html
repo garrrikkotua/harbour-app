@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex">
+<title>Harbour Control social card</title>
+<!-- Source for assets/og.png (1200x630 @2x). Render with a headless browser; not linked from the site. -->
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,600;1,9..144,400&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 1200px; height: 630px; overflow: hidden; background: #111c30; }
+.card {
+  position: relative; width: 1200px; height: 630px; overflow: hidden;
+  background: radial-gradient(900px 520px at 78% 38%, rgba(242,178,74,.16), transparent 60%),
+              linear-gradient(180deg, #0c1526 0%, #1a2a44 62%, #2b4066 100%);
+  font-family: Inter, sans-serif; color: #fdf6e9;
+}
+.stars i { position: absolute; border-radius: 50%; background: #fff; }
+.beam {
+  position: absolute; left: 905px; top: 205px; width: 900px; height: 0;
+  transform-origin: 0 0;
+}
+.beam::before, .beam::after {
+  content: ""; position: absolute; left: 0; top: -60px; width: 900px; height: 120px;
+  background: linear-gradient(90deg, rgba(242,178,74,.55), rgba(242,178,74,0) 85%);
+  clip-path: polygon(0 50%, 100% 0, 100% 100%);
+}
+.beam.l { transform: rotate(197deg); }
+.beam.r { transform: rotate(-14deg); }
+.lighthouse { position: absolute; left: 845px; top: 150px; width: 120px; }
+.glow { position: absolute; left: 850px; top: 150px; width: 110px; height: 110px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(242,178,74,.9) 0%, rgba(242,178,74,.35) 30%, transparent 70%); filter: blur(4px); }
+.sea { position: absolute; left: 0; right: 0; bottom: 0; height: 120px;
+  background: linear-gradient(180deg, rgba(17,28,48,0), #0c1526 70%); }
+.sea svg { position: absolute; bottom: 0; width: 100%; }
+.copy { position: absolute; left: 80px; top: 92px; width: 700px; }
+.brand { display: flex; align-items: center; gap: 16px; font-family: Fraunces, serif; font-weight: 600; font-size: 30px; }
+.brand img { width: 56px; height: 56px; border-radius: 22%; box-shadow: 0 6px 24px rgba(0,0,0,.45); }
+h1 { font-family: Fraunces, serif; font-weight: 600; font-size: 96px; line-height: .98; letter-spacing: -.025em; margin-top: 52px; }
+h1 em { font-weight: 400; font-style: italic; color: #f2b24a; }
+p { margin-top: 30px; font-size: 27px; line-height: 1.4; color: rgba(253,246,233,.72); }
+.pills { display: flex; gap: 12px; margin-top: 34px; }
+.pills span { font-size: 18px; font-weight: 500; padding: 9px 16px; border-radius: 999px;
+  border: 1px solid rgba(253,246,233,.22); color: rgba(253,246,233,.85); background: rgba(253,246,233,.05); }
+.pills span:first-child { background: #fdf6e9; color: #111c30; border-color: #fdf6e9; font-weight: 600; }
+.menubar {
+  position: absolute; right: 60px; top: 470px; display: flex; align-items: center; gap: 10px;
+  padding: 10px 16px; border-radius: 12px; background: rgba(12,21,38,.7);
+  border: 1px solid rgba(255,255,255,.1); font-size: 20px; font-weight: 500;
+  font-variant-numeric: tabular-nums; box-shadow: 0 10px 30px rgba(0,0,0,.35);
+}
+.menubar svg { width: 18px; height: 22px; }
+.menubar small { color: rgba(253,246,233,.5); font-size: 16px; margin-left: 6px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="stars" id="stars"></div>
+  <div class="beam l"></div><div class="beam r"></div>
+  <div class="glow"></div>
+  <svg class="lighthouse" viewBox="0 0 120 380" aria-hidden="true">
+    <rect x="44" y="30" width="32" height="26" rx="3" fill="#fdf6e9"/>
+    <circle cx="60" cy="43" r="7" fill="#f2b24a"/>
+    <rect x="36" y="56" width="48" height="9" fill="#fdf6e9"/>
+    <path d="M45 65 H75 L84 350 H36 Z" fill="#fdf6e9"/>
+    <path d="M14 380 Q 30 346 60 344 Q 92 346 108 380 Z" fill="#0c1526"/>
+    <path d="M43 118 H77 L78.5 136 H41.5 Z M40.5 200 H79.5 L81 218 H39 Z M38.5 282 H81.5 L83 300 H37 Z" fill="#c97a4a" opacity=".85"/>
+    <path d="M56 18 L60 10 L64 18 Z" fill="#fdf6e9"/>
+    <rect x="52" y="18" width="16" height="12" fill="#fdf6e9"/>
+  </svg>
+  <div class="sea">
+    <svg viewBox="0 0 1200 90" preserveAspectRatio="none" height="90"><path fill="rgba(244,241,234,.07)" d="M0 40 Q 75 22 150 40 T 300 40 T 450 40 T 600 40 T 750 40 T 900 40 T 1050 40 T 1200 40 V90 H0Z"/><path fill="rgba(244,241,234,.06)" d="M0 58 Q 100 42 200 58 T 400 58 T 600 58 T 800 58 T 1000 58 T 1200 58 V90 H0Z"/></svg>
+  </div>
+
+  <div class="copy">
+    <div class="brand"><img src="assets/icon.png" alt="">Harbour Control</div>
+    <h1>Drop anchor.<br><em>Get to work.</em></h1>
+    <p>Block distracting sites and apps on your Mac.<br>No off switch until the timer ends.</p>
+    <div class="pills"><span>Free &amp; open source</span><span>macOS 13+</span><span>Notarized</span></div>
+  </div>
+
+  <div class="menubar">
+    <svg viewBox="0 0 18 22"><rect x="6" y="2" width="6" height="5" rx="1" fill="#fdf6e9"/><circle cx="9" cy="4.5" r="1.6" fill="#f2b24a"/><rect x="4.5" y="7" width="9" height="2" fill="#fdf6e9"/><path d="M6.5 9 H11.5 L13 21 H5 Z" fill="#fdf6e9"/></svg>
+    1:14:32 <small>left</small>
+  </div>
+</div>
+<script>
+// Deterministic star positions so re-renders produce the same image.
+var seed = 7, html = '';
+function rnd() { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; }
+for (var i = 0; i < 110; i++) {
+  var s = rnd() < .15 ? 3 : 2;
+  html += '<i style="left:' + (rnd() * 1200).toFixed(0) + 'px;top:' + (rnd() * 470).toFixed(0) +
+    'px;width:' + s + 'px;height:' + s + 'px;opacity:' + (.15 + rnd() * .6).toFixed(2) + '"></i>';
+}
+document.getElementById('stars').innerHTML = html;
+</script>
+</body>
+</html>

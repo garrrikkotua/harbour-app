@@ -58,13 +58,16 @@ Use a test Mac/account and a short block. Website/app enforcement changes system
 
 ## Recovery
 
-The UI deliberately has no cancellation control. For a malfunction, an administrator can unload the daemon:
+The UI deliberately has no cancellation control. For a malfunction, an administrator can end a block in two steps:
 
 ```sh
 sudo launchctl bootout system/com.harbour.daemon
+sudo rm /var/db/harbour/state.json /Library/LaunchDaemons/com.harbour.daemon.plist
 ```
 
-The running daemon handles termination by cleaning its hosts and firewall entries. Verify cleanup before deleting `/var/db/harbour`. If the process has crashed, do not merely delete its state: expired state is needed for startup cleanup. Inspect `/var/log/harbour-daemon.log` to diagnose failures. Do not disable PF globally or overwrite `/etc/hosts` or `/etc/pf.conf` with defaults.
+The first command stops the daemon. On SIGTERM it removes its hosts entries and firewall rules but keeps its state, because macOS sends the same signal at every restart and shutdown, and a block must survive a reboot. Without the second command the block resumes at the next boot. Run the second command only after the first has finished, so the rules are already gone. The app may keep showing a countdown until it is reopened.
+
+If the daemon has crashed instead, do not delete its state: rerun `sudo launchctl bootstrap system /Library/LaunchDaemons/com.harbour.daemon.plist` so it can reapply or clean up. Inspect `/var/log/harbour-daemon.log` to diagnose failures. Do not disable PF globally or overwrite `/etc/hosts` or `/etc/pf.conf` with defaults.
 
 ## References
 

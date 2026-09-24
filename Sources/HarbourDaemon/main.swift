@@ -201,10 +201,15 @@ func applyHosts(domains: [String]) {
 
     // Merge user's domains with always-block DoH domains so browsers can't
     // side-step /etc/hosts via DNS-over-HTTPS.
-    let all = Array(Set(domains + alwaysBlockDomains))
+    // Sorted so the block is byte-identical between refreshes; that lets the
+    // 30-second refresh skip the rewrite and the DNS cache flush when nothing
+    // changed, instead of HUPing mDNSResponder ~2,900 times a day.
+    let all = Array(Set(domains + alwaysBlockDomains)).sorted()
     let addition = HostsMarker.buildHostsBlock(domains: all, start: markerStart, end: markerEnd)
+    let updated = cleaned + addition
+    if updated == hosts { return }
 
-    try? (cleaned + addition).write(toFile: hostsFile, atomically: true, encoding: .utf8)
+    try? updated.write(toFile: hostsFile, atomically: true, encoding: .utf8)
     run("/usr/bin/dscacheutil", ["-flushcache"])
     run("/usr/bin/killall", ["-HUP", "mDNSResponder"])
 }
@@ -351,6 +356,16 @@ var pfShuttingDown = false
 /// SelfControl's behaviour (they resolve once at block start, never refresh).
 var accumulatedIPs = Set<String>()
 
+/// True when the last applyPF run could not resolve a single domain — the
+/// usual situation right after boot, when launchd starts us before the
+/// network is up. The main loop then retries every 30 s instead of leaving
+/// IP rules empty until the 5-minute refresh. Guarded by pfLock.
+var pfResolvedNothing = false
+
+/// Number of applyPF jobs queued or running. Periodic refreshes are skipped
+/// while one is in flight so slow DNS can't pile up work. Guarded by pfLock.
+var pfJobsPending = 0
+
 func applyPF(domains: [String]) {
     // Skip entirely for app-only blocks.
     guard !domains.isEmpty else { return }
@@ -360,14 +375,20 @@ func applyPF(domains: [String]) {
     // Do DNS resolution OUTSIDE the lock — it's slow (~100s) and we don't need
     // to block the kill loop's cleanup path while we wait on the network.
     var freshIPs = Set<String>()
+    var resolvedAny = false
     for d in candidates {
         let resolved = resolveIPs(for: d)
+        // Never blanket-block loopback, LAN, link-local or multicast answers
+        // (sinkhole resolvers, split-horizon DNS), nor the DoH resolvers whose
+        // port 53 must stay reachable. /etc/hosts still covers these names.
+        let blockable = NetworkSafety.blockableIPs(from: resolved, keepReachable: Set(alwaysBlockIPs))
         if resolved.isEmpty {
             log("pf: could not resolve \(d)")
         } else {
-            log("pf: \(d) -> \(resolved.count) IPs")
+            resolvedAny = true
+            log("pf: \(d) -> \(resolved.count) IPs (\(resolved.count - blockable.count) skipped as local/resolver)")
         }
-        resolved.forEach { freshIPs.insert($0) }
+        freshIPs.formUnion(blockable)
 
         // If this domain is Meta/Facebook-style, bring in the hardcoded
         // AS-level CIDR ranges so IP rotation can't dodge us.
@@ -379,6 +400,7 @@ func applyPF(domains: [String]) {
 
     pfLock.lock()
     defer { pfLock.unlock() }
+    pfResolvedNothing = !resolvedAny
 
     // If cleanup started while we were resolving, bail — don't reinstall rules.
     if pfShuttingDown {
@@ -549,14 +571,40 @@ let neverKillPrefixes: [String] = [
 let neverKillPIDThreshold: pid_t = 100  // launchd + core system daemons
 
 func isCriticalPath(_ path: String) -> Bool {
-    for prefix in neverKillPrefixes where path.hasPrefix(prefix) {
-        return true
+    // Cryptex executables (Safari, WebKit) are reported under
+    // /System/Volumes/Preboot/Cryptexes/<Name>/...; check the logical path too.
+    for candidate in [path, Safety.logicalSystemPath(path)] {
+        for prefix in neverKillPrefixes where candidate.hasPrefix(prefix) {
+            return true
+        }
     }
     return false
 }
 
-func killBlockedApps(paths: [String]) {
-    guard !paths.isEmpty else { return }
+/// Effective UID of `pid`, or nil if the process is gone.
+func processOwnerUID(_ pid: pid_t) -> uid_t? {
+    var info = proc_bsdinfo()
+    let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+    guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+    return info.pbi_uid
+}
+
+/// Expands blocked bundle paths into the paths the kernel will actually
+/// report: a symlinked bundle (e.g. /Applications/Safari.app → cryptex) is
+/// matched through its resolved location too.
+func enforcementTargets(for paths: [String]) -> [String] {
+    var seen = Set<String>()
+    return paths.flatMap { path -> [String] in
+        let resolved = realpath(path, nil).map { ptr -> String in
+            defer { free(ptr) }
+            return String(cString: ptr)
+        }
+        return Safety.enforcementTargets(bundlePath: path, resolvedPath: resolved)
+    }.filter { seen.insert($0).inserted }
+}
+
+func killBlockedApps(targets: [String]) {
+    guard !targets.isEmpty else { return }
     let ownPID = getpid()
     for (pid, procPath) in listProcesses() {
         // Never kill system-critical or low-numbered PIDs, or ourselves.
@@ -564,11 +612,13 @@ func killBlockedApps(paths: [String]) {
         if pid == ownPID { continue }
         if isCriticalPath(procPath) { continue }
 
-        for target in paths {
+        for target in targets {
             // Sanity: refuse to kill based on a critical target too.
             if isCriticalPath(target) { continue }
             // Match any process whose path is inside the .app bundle
             if Safety.matchesApp(executable: procPath, bundlePath: target) {
+                // Only user-owned processes: never root helpers or agents.
+                guard let uid = processOwnerUID(pid), Safety.mayTerminate(processOwnerUID: uid) else { break }
                 if kill(pid, SIGKILL) == 0 {
                     log("killed pid=\(pid) path=\(procPath)")
                 }
@@ -612,10 +662,24 @@ func quickExitNoOp() -> Never {
     exit(0)
 }
 
+/// Lift the network rules but keep state.json and the launchd plist. Used on
+/// SIGTERM: launchd sends SIGTERM both for an administrator's
+/// `launchctl bootout` and to every daemon during an ordinary restart or
+/// shutdown, and the two cannot be told apart. Deleting state here (as a full
+/// cleanup did) meant a plain Restart from the Apple menu ended every block.
+/// Keeping it lets the next boot resume the block — or, if the timer ran out
+/// meanwhile, clean up everything at startup.
+func liftNetworkRulesKeepingState() {
+    log("termination: removing hosts + pf rules, keeping state so the block resumes at next launch")
+    removeHosts()
+    removePF()
+}
+
 // MARK: - Signal handling
 //
-// launchctl bootout sends SIGTERM. Install a trap so we run fullCleanup on TERM
-// instead of dying mid-write. SIGKILL is obviously uncatchable.
+// launchctl bootout and system shutdown both send SIGTERM. Install a trap so
+// we lift our rules on TERM instead of dying mid-write. SIGKILL is obviously
+// uncatchable.
 
 var terminationRequested = false
 signal(SIGTERM, { _ in
@@ -646,24 +710,52 @@ if Date() >= state.endTime {
 // Effective enforcement sets — union of original state + runtime additions.
 // Users can only ever ADD during an active block; we never shrink these.
 var effectiveDomains: [String] = state.domains.filter(DomainValidation.isSafeDomain)
-var effectivePaths: [String] = state.blockedPaths.filter(Safety.isBlockableAppPath)
+// Bundle IDs stay index-aligned with paths so persisted state keeps them.
+var effectivePaths: [String] = []
+var effectiveBundleIDs: [String] = []
+for (i, path) in state.blockedPaths.enumerated() where Safety.isBlockableAppPath(path) {
+    effectivePaths.append(path)
+    effectiveBundleIDs.append(i < state.blockedBundleIDs.count ? state.blockedBundleIDs[i] : "")
+}
+/// effectivePaths plus their symlink-resolved locations; what the kill loop
+/// matches against. Recomputed on additions and every 30 s (an app may be
+/// installed or moved mid-session).
+var killTargets = enforcementTargets(for: effectivePaths)
 
 applyHosts(domains: effectiveDomains)
 log("block active: \(state.domains.count) domains, \(state.blockedPaths.count) apps, ends at \(state.endTime)")
-log("blocked paths: \(effectivePaths)")
+log("blocked paths: \(effectivePaths) targets: \(killTargets)")
 
 // pfctl setup can take ~100s because of serial DNS resolution. Run it on
 // a background thread so the app-kill loop starts enforcing immediately —
 // otherwise blocked apps stay alive during the first minute or two of a block.
 let pfQueue = DispatchQueue(label: "com.harbour.pf")
-func schedulePF() {
+/// `force` always queues a fresh snapshot (used when the domain list grew);
+/// periodic refreshes and retries are dropped while a job is still in flight.
+func schedulePF(force: Bool = false) {
+    pfLock.lock()
+    if !force && pfJobsPending > 0 {
+        pfLock.unlock()
+        return
+    }
+    pfJobsPending += 1
+    pfLock.unlock()
     let snapshot = effectiveDomains
-    pfQueue.async { applyPF(domains: snapshot) }
+    pfQueue.async {
+        applyPF(domains: snapshot)
+        pfLock.lock(); pfJobsPending -= 1; pfLock.unlock()
+    }
 }
-schedulePF()
+func pfNeedsRetry() -> Bool {
+    pfLock.lock(); defer { pfLock.unlock() }
+    return pfResolvedNothing
+}
+schedulePF(force: true)
 
 // Additions file watcher — re-read every second by checking mtime. Cheap.
 var lastAdditionsMtime: TimeInterval = 0
+/// The additions file is user-writable; cap what root will read from it.
+let maxAdditionsBytes = 1 << 20
 
 /// Merges runtime additions into effective sets. Returns true if anything changed.
 func reloadAdditionsIfChanged() -> Bool {
@@ -678,7 +770,9 @@ func reloadAdditionsIfChanged() -> Bool {
     // Only accept the new mtime *after* a successful decode — if the file
     // is torn mid-write (atomic swap hasn't landed yet) we want to retry on
     // the next tick rather than silently skip this change forever.
-    guard let data = try? Data(contentsOf: URL(fileURLWithPath: additionsPath)),
+    // No symlinks, FIFOs or devices: a blocking read here would stall the
+    // loop past endTime and leave the Mac blocked indefinitely.
+    guard let data = SecureFileRead.regularFile(atPath: additionsPath, maxBytes: maxAdditionsBytes),
           let adds = try? JSONDecoder().decode(BlockAdditions.self, from: data)
     else {
         return false
@@ -695,6 +789,10 @@ func reloadAdditionsIfChanged() -> Bool {
     var seenP = Set(effectivePaths)
     for a in adds.apps where Safety.isBlockableAppPath(a.path) && seenP.insert(a.path).inserted {
         effectivePaths.append(a.path)
+        effectiveBundleIDs.append(a.bundleID)
+    }
+    if effectivePaths.count != origPathCount {
+        killTargets = enforcementTargets(for: effectivePaths)
     }
 
     let newD = effectiveDomains.count - origDomainCount
@@ -703,7 +801,7 @@ func reloadAdditionsIfChanged() -> Bool {
     if newD + newP > 0 {
         let persisted = BlockState(startTime: state.startTime, endTime: state.endTime,
             domains: effectiveDomains, blockedPaths: effectivePaths,
-            blockedBundleIDs: effectivePaths.map { _ in "" }, additionsPath: state.additionsPath)
+            blockedBundleIDs: effectiveBundleIDs, additionsPath: state.additionsPath)
         if let data = try? JSONEncoder().encode(persisted) {
             do { try data.write(to: URL(fileURLWithPath: stateFile), options: .atomic) }
             catch { log("could not persist additions: \(error)") }
@@ -715,13 +813,13 @@ func reloadAdditionsIfChanged() -> Bool {
 // Re-apply hosts + pf periodically in case something overwrites them or IPs change
 var tick = 0
 while Date() < state.endTime && !terminationRequested {
-    killBlockedApps(paths: effectivePaths)
+    killBlockedApps(targets: killTargets)
     tick += 1
 
     // Check additions file — cheap stat call, only triggers work on change.
     if reloadAdditionsIfChanged() {
         applyHosts(domains: effectiveDomains)
-        schedulePF()
+        schedulePF(force: true)
     }
 
     if tick % 10 == 0 {
@@ -733,7 +831,7 @@ while Date() < state.endTime && !terminationRequested {
         var nearMiss: [String] = []
         for (pid, p) in procs {
             var hit = false
-            for t in effectivePaths where p.hasPrefix(t) {
+            for t in killTargets where Safety.matchesApp(executable: p, bundlePath: t) {
                 matchCount += 1; hit = true; break
             }
             if !hit {
@@ -751,6 +849,10 @@ while Date() < state.endTime && !terminationRequested {
     }
     if tick % 30 == 0 {
         applyHosts(domains: effectiveDomains)
+        killTargets = enforcementTargets(for: effectivePaths)
+        // Nothing resolved last time (typically: booted before the network
+        // came up) — retry soon rather than waiting for the 5-minute refresh.
+        if pfNeedsRetry() { schedulePF() }
     }
     // Re-resolve + reload pf every 5 minutes on a background thread so the
     // kill loop keeps firing while DNS work is in flight.
@@ -761,9 +863,15 @@ while Date() < state.endTime && !terminationRequested {
 }
 
 if terminationRequested {
-    log("received SIGTERM/SIGINT — cleanup before exit")
-} else {
-    log("timer expired")
+    // Restart/shutdown or an administrator's bootout. Keep state so a reboot
+    // resumes the block. Exit non-zero so a stray `kill` is respawned by
+    // launchd (KeepAlive.SuccessfulExit=false); bootout and shutdown never
+    // respawn. To end a malfunctioning block for good, an administrator also
+    // deletes /var/db/harbour/state.json after the bootout.
+    log("received SIGTERM/SIGINT before expiry")
+    liftNetworkRulesKeepingState()
+    exit(1)
 }
+log("timer expired")
 fullCleanup()
 exit(0)
