@@ -1,6 +1,8 @@
 # Harbour Control
 
-A native macOS focus app from Pairmind Limited. Block distracting websites and apps for 1 minute to 24 hours. The app has no early-cancel button; quitting the window does not end a block.
+A free, open-source macOS focus app from Pairmind Limited. Block distracting websites and apps for 1 minute to 24 hours. The app has no early-cancel button; quitting the window does not end a block.
+
+**Website:** [garrrikkotua.github.io/harbour-app](https://garrrikkotua.github.io/harbour-app/) · **Download:** [Harbour-Control-latest.dmg](https://github.com/garrrikkotua/harbour-app/releases/latest/download/Harbour-Control-latest.dmg)
 
 ## Install
 
@@ -13,7 +15,7 @@ A native macOS focus app from Pairmind Limited. Block distracting websites and a
 
 **Requirements:** macOS 13 Ventura or later, Apple Silicon or Intel.
 
-The new release workflow produces Developer ID-signed, Apple-notarized installers. Older v0.1.0 downloads are unsigned; they are not replaced until a new release is published. Build from source if no signed release is available yet.
+Releases from v0.2.0 onward are Developer ID-signed and notarized by Apple. v0.1.0 was unsigned.
 
 Use **Harbour Control → Check for Updates…** to open the latest GitHub release. Updates are installed manually when no block is active. Checksums are included with new releases in `SHA256SUMS.txt`.
 
@@ -66,6 +68,7 @@ Sources/HarbourCore/     Shared models, validation, presets, safety rules
 Sources/HarbourDaemon/   Hosts, packet-filter, and app enforcement
 Tests/HarbourCoreTests/  Shared-logic regression tests
 scripts/                Signed release packaging
+site/                   Landing page, deployed to GitHub Pages
 ```
 
 ## Signed GitHub releases

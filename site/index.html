@@ -1,0 +1,638 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Harbour Control: a focus app for Mac with no off switch</title>
+<meta name="description" content="Block distracting websites and apps on your Mac for 1 minute to 24 hours. No cancel button, no account, no tracking. Free and open source.">
+<link rel="canonical" href="https://garrrikkotua.github.io/harbour-app/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Harbour Control: a focus app for Mac with no off switch">
+<meta property="og:description" content="Block distracting websites and apps until the timer ends. Free, open source, notarized by Apple.">
+<meta property="og:url" content="https://garrrikkotua.github.io/harbour-app/">
+<meta property="og:image" content="https://garrrikkotua.github.io/harbour-app/assets/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#111c30">
+<link rel="icon" type="image/png" href="assets/favicon.png">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Harbour Control",
+  "operatingSystem": "macOS 13 or later",
+  "applicationCategory": "ProductivityApplication",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "downloadUrl": "https://github.com/garrrikkotua/harbour-app/releases/latest/download/Harbour-Control-latest.dmg",
+  "license": "https://opensource.org/licenses/MIT"
+}
+</script>
+<style>
+:root {
+  --navy-deep: #111c30;
+  --navy: #1a2a44;
+  --navy-light: #2b4066;
+  --navy-soft: #e9eef7;
+  --parchment: #f4f1ea;
+  --parchment-warm: #fdf6e9;
+  --cream: #f0ece2;
+  --cream-border: #d8d0bd;
+  --cream-border-soft: #e6dec9;
+  --ink: #1a2a44;
+  --ink-2: #5a6b85;
+  --ink-3: #8a95a8;
+  --amber: #c97a4a;
+  --beam: #f2b24a;
+  --serif: "Fraunces", "New York", ui-serif, Georgia, serif;
+  --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --wrap: 1120px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--parchment);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+a { color: inherit; }
+img { display: block; max-width: 100%; }
+.wrap { max-width: var(--wrap); margin: 0 auto; padding: 0 24px; }
+.serif { font-family: var(--serif); }
+
+/* ---------- Night section (hero) ---------- */
+.night {
+  position: relative;
+  color: var(--parchment-warm);
+  background: linear-gradient(180deg, var(--navy-deep) 0%, var(--navy) 55%, var(--navy-light) 100%);
+  overflow: hidden;
+  isolation: isolate;
+}
+.stars { position: absolute; inset: 0; z-index: -1; pointer-events: none; }
+.stars i {
+  position: absolute; width: 2px; height: 2px; border-radius: 50%;
+  background: #fff; opacity: .5;
+  animation: twinkle var(--d, 4s) ease-in-out infinite;
+  animation-delay: var(--delay, 0s);
+}
+@keyframes twinkle { 0%,100% { opacity: .15 } 50% { opacity: .8 } }
+
+.sea {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 120px; z-index: -1;
+  background:
+    radial-gradient(120% 60% at 50% 100%, rgba(242,178,74,.10), transparent 60%);
+}
+.sea svg { position: absolute; bottom: 0; width: 200%; height: 70px; animation: drift 22s linear infinite; }
+.sea svg:nth-child(2) { height: 50px; opacity: .6; animation-duration: 34s; animation-direction: reverse; }
+@keyframes drift { from { transform: translateX(0) } to { transform: translateX(-50%) } }
+
+nav {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 22px 0;
+}
+.brand { display: flex; align-items: center; gap: 12px; text-decoration: none; font-family: var(--serif); font-weight: 600; font-size: 19px; letter-spacing: -.01em; }
+.brand img { width: 34px; height: 34px; border-radius: 22%; box-shadow: 0 2px 10px rgba(0,0,0,.3); }
+.nav-links { display: flex; gap: 28px; align-items: center; font-size: 14px; }
+.nav-links a { text-decoration: none; opacity: .7; transition: opacity .15s; }
+.nav-links a:hover { opacity: 1; }
+.gh {
+  display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px;
+  border: 1px solid rgba(253,246,233,.22); opacity: 1 !important;
+}
+.gh:hover { background: rgba(253,246,233,.08); }
+.gh svg { width: 16px; height: 16px; }
+
+.hero {
+  display: grid; grid-template-columns: 1.05fr .95fr; gap: 56px; align-items: center;
+  padding: 56px 0 150px;
+}
+.eyebrow {
+  display: inline-flex; align-items: center; gap: 10px;
+  font-size: 12px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--beam);
+}
+.eyebrow::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--beam); box-shadow: 0 0 12px 3px rgba(242,178,74,.6); }
+h1 {
+  font-family: var(--serif); font-weight: 600;
+  font-size: clamp(44px, 6.4vw, 78px); line-height: 1.02; letter-spacing: -.025em;
+  margin: 20px 0 22px;
+}
+h1 em { font-style: italic; font-weight: 400; color: var(--beam); }
+.lede { font-size: 19px; line-height: 1.6; color: rgba(253,246,233,.72); max-width: 520px; }
+.cta { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 36px; align-items: center; }
+.btn {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 16px 26px; border-radius: 14px; font-weight: 600; font-size: 16px; text-decoration: none;
+  transition: transform .15s ease, box-shadow .2s ease, background .2s;
+}
+.btn svg { width: 18px; height: 18px; flex: none; }
+.btn-primary {
+  background: var(--parchment-warm); color: var(--navy-deep);
+  box-shadow: 0 10px 30px -8px rgba(242,178,74,.45), inset 0 -2px 0 rgba(0,0,0,.08);
+}
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 16px 40px -8px rgba(242,178,74,.6), inset 0 -2px 0 rgba(0,0,0,.08); }
+.btn-ghost { color: var(--parchment-warm); border: 1px solid rgba(253,246,233,.25); }
+.btn-ghost:hover { background: rgba(253,246,233,.08); }
+.meta { margin-top: 22px; display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: rgba(253,246,233,.55); }
+.meta span { display: inline-flex; align-items: center; gap: 6px; }
+.meta svg { width: 14px; height: 14px; opacity: .8; }
+
+/* ---------- App window mockups ---------- */
+.window {
+  width: 100%; max-width: 440px; margin-left: auto;
+  border-radius: 14px; overflow: hidden;
+  box-shadow: 0 40px 90px -20px rgba(0,0,0,.65), 0 0 0 1px rgba(255,255,255,.08);
+  transform: perspective(1400px) rotateY(-7deg) rotateX(2deg);
+  transition: transform .6s cubic-bezier(.2,.8,.2,1);
+}
+.window:hover { transform: perspective(1400px) rotateY(0) rotateX(0); }
+.titlebar {
+  height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 14px;
+  font-size: 12px; font-weight: 600;
+}
+.titlebar i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+.titlebar i:nth-child(1) { background: #ff5f57; }
+.titlebar i:nth-child(2) { background: #febc2e; }
+.titlebar i:nth-child(3) { background: #28c840; }
+.titlebar span { margin-left: 10px; opacity: .75; }
+
+.active-app {
+  position: relative; text-align: center; padding: 26px 34px 30px;
+  background: linear-gradient(180deg, var(--navy-deep), var(--navy) 60%, var(--navy-light));
+  color: var(--parchment-warm);
+}
+.active-app .titlebar { position: absolute; top: 0; left: 0; right: 0; color: rgba(255,255,255,.7); }
+.active-app .stars { z-index: 0; }
+.active-app > *:not(.stars):not(.titlebar) { position: relative; z-index: 1; }
+.lighthouse { width: 108px; height: 108px; margin: 22px auto 6px; }
+.lighthouse .beam { transform-origin: 60px 38px; animation: sweep 6s ease-in-out infinite; }
+@keyframes sweep { 0%,100% { transform: rotate(-16deg) } 50% { transform: rotate(16deg) } }
+.lamp { animation: glow 3s ease-in-out infinite; }
+@keyframes glow { 0%,100% { opacity: .85 } 50% { opacity: 1 } }
+.active-app h3 { font-family: var(--serif); font-size: 28px; font-weight: 700; }
+.active-app .sub { font-size: 13px; color: rgba(255,255,255,.55); margin-top: 2px; }
+.clock {
+  font-family: var(--serif); font-weight: 600; font-size: 54px; letter-spacing: -.01em;
+  font-variant-numeric: tabular-nums; margin: 12px 0 14px;
+}
+.track { height: 6px; border-radius: 99px; background: rgba(255,255,255,.12); margin: 0 20px; overflow: hidden; }
+.track b { display: block; height: 100%; width: 38%; border-radius: inherit; background: linear-gradient(90deg, var(--amber), var(--beam)); transition: width 1s linear; }
+.stats { display: flex; justify-content: center; gap: 26px; margin-top: 18px; font-size: 13px; color: rgba(255,255,255,.75); }
+.stats span { display: inline-flex; align-items: center; gap: 7px; }
+.stats svg { width: 14px; height: 14px; }
+.ends { font-size: 12px; color: rgba(255,255,255,.42); margin-top: 8px; }
+.addonly {
+  margin-top: 18px; padding: 12px 14px; border-radius: 12px; text-align: left;
+  display: flex; justify-content: space-between; align-items: center;
+  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08);
+  font-size: 12px; font-weight: 600; letter-spacing: .04em; color: rgba(255,255,255,.7);
+}
+.addonly small { font-weight: 400; font-size: 10px; letter-spacing: 0; color: rgba(255,255,255,.38); }
+
+/* ---------- Strip ---------- */
+.strip { background: var(--navy-deep); color: rgba(253,246,233,.8); border-top: 1px solid rgba(255,255,255,.06); }
+.strip .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 14px 30px; padding-top: 22px; padding-bottom: 22px; font-size: 14px; }
+.strip span { display: inline-flex; align-items: center; gap: 10px; }
+.strip span::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--beam); }
+
+/* ---------- Light sections ---------- */
+section.light { padding: 120px 0; }
+.kicker { font-size: 12px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--amber); }
+h2 {
+  font-family: var(--serif); font-weight: 600; letter-spacing: -.02em;
+  font-size: clamp(34px, 4.4vw, 52px); line-height: 1.08; margin: 14px 0 18px;
+}
+h2 em { font-style: italic; font-weight: 400; color: var(--amber); }
+.section-lede { font-size: 18px; color: var(--ink-2); max-width: 620px; }
+
+.manifesto { display: grid; grid-template-columns: 1fr 1fr; gap: 64px; align-items: center; }
+.manifesto blockquote {
+  font-family: var(--serif); font-size: clamp(26px, 3vw, 36px); line-height: 1.25; font-weight: 400;
+  letter-spacing: -.01em; border-left: 3px solid var(--amber); padding-left: 28px;
+}
+.manifesto blockquote strong { font-weight: 600; }
+.manifesto p + p { margin-top: 14px; }
+.manifesto .body { font-size: 17px; color: var(--ink-2); }
+
+.features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 56px; }
+.card {
+  background: var(--parchment-warm); border: 1px solid var(--cream-border-soft);
+  border-radius: 18px; padding: 28px 26px 30px;
+  transition: transform .2s ease, box-shadow .2s ease, border-color .2s;
+}
+.card:hover { transform: translateY(-3px); box-shadow: 0 18px 40px -22px rgba(26,42,68,.35); border-color: var(--cream-border); }
+.icon {
+  width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center;
+  background: var(--navy); color: var(--parchment-warm); margin-bottom: 20px;
+}
+.icon svg { width: 22px; height: 22px; }
+.card h3 { font-family: var(--serif); font-size: 21px; font-weight: 600; margin-bottom: 8px; letter-spacing: -.01em; }
+.card p { font-size: 15px; color: var(--ink-2); }
+
+/* How it works */
+.how { background: var(--cream); border-top: 1px solid var(--cream-border-soft); border-bottom: 1px solid var(--cream-border-soft); }
+.how-grid { display: grid; grid-template-columns: .9fr 1.1fr; gap: 72px; align-items: center; margin-top: 20px; }
+.steps { list-style: none; counter-reset: step; display: grid; gap: 28px; margin-top: 36px; }
+.steps li { counter-increment: step; display: grid; grid-template-columns: 48px 1fr; gap: 18px; }
+.steps li::before {
+  content: counter(step); width: 48px; height: 48px; border-radius: 50%;
+  display: grid; place-items: center; font-family: var(--serif); font-size: 20px; font-weight: 600;
+  background: var(--parchment-warm); border: 1px solid var(--cream-border);
+}
+.steps h3 { font-family: var(--serif); font-size: 20px; font-weight: 600; margin: 4px 0 4px; }
+.steps p { color: var(--ink-2); font-size: 15px; }
+
+.setup-app { background: linear-gradient(180deg, var(--parchment), var(--navy-soft)); color: var(--ink); padding-bottom: 22px; }
+.setup-app .titlebar { color: var(--ink); }
+.window.flat { transform: none; margin: 0 auto; max-width: 460px; box-shadow: 0 40px 80px -30px rgba(26,42,68,.45), 0 0 0 1px rgba(26,42,68,.08); }
+.setup-inner { padding: 8px 22px 0; }
+.setup-inner h4 { font-family: var(--serif); font-size: 26px; font-weight: 700; text-align: center; }
+.setup-inner .hint { font-size: 12px; color: var(--ink-2); text-align: center; margin: 4px 0 16px; }
+.label { font-size: 10px; font-weight: 600; letter-spacing: .1em; color: var(--ink-2); margin: 14px 0 6px; }
+.panel { background: #fff; border-radius: 12px; border: 1px solid var(--cream-border-soft); overflow: hidden; }
+.inputrow { display: flex; gap: 8px; padding: 8px; align-items: center; border-bottom: 1px solid var(--cream-border-soft); }
+.fakeinput { flex: 1; padding: 6px 10px; border-radius: 7px; background: var(--parchment); font-size: 12px; color: var(--ink-3); }
+.pill { font-size: 11px; font-weight: 600; padding: 6px 10px; border-radius: 7px; background: var(--navy-soft); }
+.row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; font-size: 13px; border-bottom: 1px solid var(--cream-border-soft); }
+.row:last-child { border-bottom: 0; }
+.row .fav { width: 16px; height: 16px; border-radius: 4px; flex: none; }
+.row .x { margin-left: auto; width: 13px; height: 13px; border-radius: 50%; background: #c9ced8; }
+.durations { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+.durations span { font-size: 11px; text-align: center; padding: 6px 0; border-radius: 7px; background: #fff; border: 1px solid var(--cream-border-soft); }
+.durations .on { background: var(--navy); color: var(--parchment-warm); border-color: var(--navy); }
+.start {
+  margin-top: 16px; padding: 12px; border-radius: 11px; text-align: center; font-weight: 600; font-size: 14px;
+  background: linear-gradient(180deg, var(--navy-light), var(--navy)); color: #fff;
+}
+.fine { font-size: 10px; color: var(--ink-3); text-align: center; margin-top: 8px; }
+
+/* Under the hood */
+.hood { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; margin-top: 52px; }
+.hood-item { padding: 26px; border-radius: 16px; background: var(--parchment-warm); border: 1px solid var(--cream-border-soft); }
+.hood-item code {
+  font-family: var(--mono); font-size: 12px; padding: 3px 8px; border-radius: 6px;
+  background: var(--navy); color: var(--parchment-warm); display: inline-block; margin-bottom: 14px;
+}
+.hood-item h3 { font-family: var(--serif); font-size: 20px; font-weight: 600; margin-bottom: 6px; }
+.hood-item p { font-size: 15px; color: var(--ink-2); }
+.honest {
+  margin-top: 26px; padding: 22px 26px; border-radius: 16px; border: 1px dashed var(--cream-border);
+  font-size: 15px; color: var(--ink-2);
+}
+.honest strong { color: var(--ink); }
+
+/* FAQ */
+.faq { max-width: 800px; margin: 48px auto 0; }
+details { border-bottom: 1px solid var(--cream-border); }
+summary {
+  list-style: none; cursor: pointer; padding: 24px 40px 24px 0; position: relative;
+  font-family: var(--serif); font-size: 20px; font-weight: 600; letter-spacing: -.005em;
+}
+summary::-webkit-details-marker { display: none; }
+summary::after {
+  content: ""; position: absolute; right: 6px; top: 50%; width: 12px; height: 12px; margin-top: -8px;
+  border-right: 2px solid var(--ink-2); border-bottom: 2px solid var(--ink-2); transform: rotate(45deg);
+  transition: transform .2s;
+}
+details[open] summary::after { transform: rotate(-135deg); margin-top: -2px; }
+details p { padding: 0 40px 24px 0; color: var(--ink-2); font-size: 16px; }
+details code { font-family: var(--mono); font-size: 13px; background: var(--cream); padding: 2px 6px; border-radius: 5px; }
+
+/* Final CTA */
+.final { text-align: center; padding: 130px 0 140px; }
+.final h2 { font-size: clamp(40px, 5.5vw, 68px); }
+.final .lede { margin: 0 auto; }
+.final .cta { justify-content: center; }
+.final .brand-icon { width: 96px; height: 96px; border-radius: 22%; margin: 0 auto 30px; box-shadow: 0 20px 50px -10px rgba(0,0,0,.6), 0 0 60px rgba(242,178,74,.25); }
+
+footer { background: var(--navy-deep); color: rgba(253,246,233,.5); font-size: 13px; padding: 28px 0; border-top: 1px solid rgba(255,255,255,.06); }
+footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
+footer a { color: rgba(253,246,233,.75); text-decoration: none; }
+footer a:hover { color: var(--parchment-warm); }
+
+.reveal { opacity: 0; transform: translateY(18px); transition: opacity .7s ease, transform .7s ease; }
+.reveal.in { opacity: 1; transform: none; }
+
+@media (max-width: 900px) {
+  .hero, .manifesto, .how-grid { grid-template-columns: 1fr; }
+  .hero { padding: 28px 0 130px; gap: 56px; }
+  .window { margin: 0 auto; transform: none; }
+  .features { grid-template-columns: 1fr 1fr; }
+  .nav-links a:not(.gh) { display: none; }
+  section.light { padding: 88px 0; }
+}
+@media (max-width: 600px) {
+  .wrap { padding: 0 16px; }
+  .features, .hood { grid-template-columns: 1fr; }
+  .btn { width: 100%; justify-content: center; }
+  .clock { font-size: 44px; }
+  .active-app { padding: 24px 20px 26px; }
+  .durations span { font-size: 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .reveal { opacity: 1; transform: none; }
+}
+</style>
+</head>
+<body>
+
+<header class="night">
+  <div class="stars" data-stars="70"></div>
+  <div class="sea" aria-hidden="true">
+    <svg viewBox="0 0 1440 70" preserveAspectRatio="none"><path fill="rgba(244,241,234,.06)" d="M0 30 Q 90 10 180 30 T 360 30 T 540 30 T 720 30 T 900 30 T 1080 30 T 1260 30 T 1440 30 V70 H0Z"/></svg>
+    <svg viewBox="0 0 1440 70" preserveAspectRatio="none"><path fill="rgba(244,241,234,.08)" d="M0 40 Q 120 20 240 40 T 480 40 T 720 40 T 960 40 T 1200 40 T 1440 40 V70 H0Z"/></svg>
+  </div>
+
+  <div class="wrap">
+    <nav>
+      <a class="brand" href="#top" id="top">
+        <img src="assets/icon.png" alt="" width="34" height="34">
+        Harbour Control
+      </a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#how">How it works</a>
+        <a href="#faq">FAQ</a>
+        <a class="gh" href="https://github.com/garrrikkotua/harbour-app">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          Star on GitHub
+        </a>
+      </div>
+    </nav>
+
+    <div class="hero">
+      <div>
+        <span class="eyebrow">Free &amp; open source for macOS</span>
+        <h1>Drop anchor.<br><em>Get to work.</em></h1>
+        <p class="lede">Harbour Control blocks the websites and apps that pull you off course. Set a timer from one minute to a full day, and nothing gets back in until it ends. Quitting doesn't stop it. Neither does a reboot.</p>
+        <div class="cta">
+          <a class="btn btn-primary" href="https://github.com/garrrikkotua/harbour-app/releases/latest/download/Harbour-Control-latest.dmg">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.37 12.6c-.02-2.2 1.8-3.26 1.88-3.31-1.03-1.5-2.62-1.7-3.18-1.73-1.35-.14-2.64.8-3.33.8-.69 0-1.74-.78-2.87-.76-1.47.02-2.83.86-3.59 2.18-1.53 2.66-.39 6.6 1.1 8.76.73 1.06 1.6 2.24 2.73 2.2 1.1-.04 1.51-.71 2.84-.71 1.32 0 1.7.71 2.86.69 1.18-.02 1.93-1.07 2.65-2.13.84-1.22 1.18-2.41 1.2-2.47-.03-.01-2.3-.88-2.33-3.52zM14.2 6.13c.6-.73 1.01-1.75.9-2.76-.87.04-1.92.58-2.54 1.31-.56.64-1.05 1.67-.92 2.66.97.08 1.96-.49 2.56-1.21z"/></svg>
+            Download for Mac
+          </a>
+          <a class="btn btn-ghost" href="https://github.com/garrrikkotua/harbour-app">View the source</a>
+        </div>
+        <div class="meta">
+          <span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 1.5l5.5 2v4c0 3.5-2.4 6-5.5 7-3.1-1-5.5-3.5-5.5-7v-4z"/><path d="M5.5 8l1.8 1.8L10.8 6.3"/></svg>Notarized by Apple</span>
+          <span>macOS 13+</span>
+          <span>Apple Silicon &amp; Intel</span>
+          <span id="version">Latest release</span>
+        </div>
+      </div>
+
+      <div class="window reveal" aria-label="Harbour Control during an active block">
+        <div class="active-app">
+          <div class="stars" data-stars="30"></div>
+          <div class="titlebar"><i></i><i></i><i></i><span>Harbour Control</span></div>
+          <svg class="lighthouse" viewBox="0 0 120 120" aria-hidden="true">
+            <defs>
+              <linearGradient id="beamg" x1="0" x2="1">
+                <stop offset="0" stop-color="#f2b24a" stop-opacity=".55"/>
+                <stop offset="1" stop-color="#f2b24a" stop-opacity="0"/>
+              </linearGradient>
+            </defs>
+            <g class="beam">
+              <path d="M60 38 L120 22 L120 54 Z" fill="url(#beamg)"/>
+              <path d="M60 38 L0 22 L0 54 Z" fill="url(#beamg)"/>
+            </g>
+            <rect x="48" y="26" width="24" height="20" rx="2" fill="#fdf6e9"/>
+            <circle class="lamp" cx="60" cy="36" r="5" fill="#f2b24a"/>
+            <rect x="42" y="46" width="36" height="7" fill="#fdf6e9"/>
+            <path d="M49 53 H71 L74 106 H46 Z" fill="#fdf6e9"/>
+            <rect x="46" y="68" width="28" height="5" fill="#1a2a44" opacity=".25"/>
+            <rect x="46" y="86" width="28" height="5" fill="#1a2a44" opacity=".25"/>
+          </svg>
+          <h3>Blocking</h3>
+          <p class="sub">You're in a focused session.</p>
+          <div class="clock" id="clock">01:14:32</div>
+          <div class="track"><b id="progress"></b></div>
+          <div class="stats">
+            <span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6.5"/><path d="M1.5 8h13M8 1.5c2 2 2 11 0 13M8 1.5c-2 2-2 11 0 13"/></svg>27 sites</span>
+            <span><svg viewBox="0 0 16 16" fill="currentColor"><rect x="1.5" y="1.5" width="5.5" height="5.5" rx="1.2"/><rect x="9" y="1.5" width="5.5" height="5.5" rx="1.2"/><rect x="1.5" y="9" width="5.5" height="5.5" rx="1.2"/><rect x="9" y="9" width="5.5" height="5.5" rx="1.2"/></svg>3 apps</span>
+          </div>
+          <p class="ends" id="ends">Ends 4:30 PM</p>
+          <div class="addonly">Manage blocklist <small>add only · no take-backs</small></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="strip">
+  <div class="wrap">
+    <span>No early-cancel button</span>
+    <span>No account</span>
+    <span>No analytics</span>
+    <span>No subscription</span>
+    <span>MIT licensed</span>
+  </div>
+</div>
+
+<main>
+  <section class="light">
+    <div class="wrap manifesto reveal">
+      <blockquote>Most blockers have a <strong>“just five more minutes”</strong> button. Harbour Control doesn't have one.</blockquote>
+      <div class="body">
+        <p>Willpower gives out at 3 PM on a Tuesday. Harbour Control does the deciding for you ahead of time, while you still care about the deadline.</p>
+        <p>Choose what to block and for how long, confirm with your admin password, and the lock moves out of the app and into macOS. Close the window, force-quit, restart the Mac. The block holds until the timer runs out, then cleans up after itself.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="light" id="features" style="padding-top:0">
+    <div class="wrap">
+      <div class="reveal">
+        <span class="kicker">Features</span>
+        <h2>Small app, <em>firm limits.</em></h2>
+        <p class="section-lede">A native SwiftUI app that does one job. It doesn't need an Electron runtime, a menu-bar upsell or a cloud dashboard.</p>
+      </div>
+      <div class="features">
+        <article class="card reveal">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg></div>
+          <h3>Websites, blocked everywhere</h3>
+          <p>The block covers every browser. Harbour Control rewrites the hosts file and adds firewall rules at the IP level, so switching to another browser won't get you through.</p>
+        </article>
+        <article class="card reveal">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><path d="M14 14l6 6M20 14l-6 6" stroke-linecap="round"/></svg></div>
+          <h3>Apps, too</h3>
+          <p>Choose Telegram, Slack, Steam or anything else in Applications. If a blocked app is launched, it's closed within about a second, until the timer runs out.</p>
+        </article>
+        <article class="card reveal">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 018 0v3"/><circle cx="12" cy="15.5" r="1.2" fill="currentColor"/></svg></div>
+          <h3>No way out early</h3>
+          <p>A root daemon enforces the block, not the app window. It survives quitting, logging out and rebooting, and resumes exactly where it left off.</p>
+        </article>
+        <article class="card reveal">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h7"/><path d="M18 14v6M15 17h6"/></svg></div>
+          <h3>Presets in one click</h3>
+          <p>Social Media, Video &amp; Streaming, News &amp; Forums. The presets include the CDN and API domains that a simple list of hostnames tends to miss.</p>
+        </article>
+        <article class="card reveal">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div>
+          <h3>Add-only during a session</h3>
+          <p>You can add another site or app in the middle of a session, and it's enforced right away. Nothing can be removed until the session ends.</p>
+        </article>
+        <article class="card reveal">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 3l7.5 3v6c0 4.5-3.2 7.8-7.5 9-4.3-1.2-7.5-4.5-7.5-9V6z"/><path d="M9 12l2 2 4-4"/></svg></div>
+          <h3>Private by design</h3>
+          <p>No accounts, no telemetry, no servers of ours. Your settings stay on your Mac. You can read the source to check.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="light how" id="how">
+    <div class="wrap how-grid">
+      <div class="reveal">
+        <span class="kicker">How it works</span>
+        <h2>Three steps.<br><em>Then no exits.</em></h2>
+        <ol class="steps">
+          <li><div><h3>Pick your distractions</h3><p>Type a domain, choose a preset, or add apps from your Applications folder.</p></div></li>
+          <li><div><h3>Set the timer</h3><p>Anywhere from one minute to 24 hours. Use a quick preset or set exact hours and minutes.</p></div></li>
+          <li><div><h3>Confirm and start</h3><p>Enter your admin password once. After that the block runs until the timer ends, and nothing in the app can stop it early.</p></div></li>
+        </ol>
+      </div>
+
+      <div class="window flat reveal" aria-label="Harbour Control setup screen">
+        <div class="setup-app">
+          <div class="titlebar"><i></i><i></i><i></i><span>Harbour Control</span></div>
+          <div class="setup-inner">
+            <h4>Start a block</h4>
+            <p class="hint">Pick what to block. Harbour Control keeps it locked until the timer ends.</p>
+            <div class="label">DOMAINS</div>
+            <div class="panel">
+              <div class="inputrow"><span class="fakeinput">twitter.com</span><span class="pill">Add</span><span class="pill">☰ Presets</span></div>
+              <div class="row"><span class="fav" style="background:#111"></span>x.com<span class="x"></span></div>
+              <div class="row"><span class="fav" style="background:#ff0033"></span>youtube.com<span class="x"></span></div>
+              <div class="row"><span class="fav" style="background:#ff4500"></span>reddit.com<span class="x"></span></div>
+              <div class="row"><span class="fav" style="background:linear-gradient(45deg,#f9ce34,#ee2a7b,#6228d7)"></span>instagram.com<span class="x"></span></div>
+            </div>
+            <div class="label">APPS</div>
+            <div class="panel">
+              <div class="row"><span class="fav" style="background:#2aabee"></span>Telegram<span class="x"></span></div>
+              <div class="row"><span class="fav" style="background:#1b2838"></span>Steam<span class="x"></span></div>
+            </div>
+            <div class="label">DURATION</div>
+            <div class="durations"><span>15m</span><span>30m</span><span>1h</span><span class="on">2h</span><span>4h</span><span>8h</span><span>24h</span></div>
+            <div class="start">Start block</div>
+            <p class="fine">Requires admin password to start. Cannot be cancelled.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="light">
+    <div class="wrap">
+      <div class="reveal">
+        <span class="kicker">Under the hood</span>
+        <h2>Open source, <em>so you can check.</em></h2>
+        <p class="section-lede">Harbour Control changes system settings, so you should be able to see exactly what it does. It's a small Swift codebase, MIT licensed, built on ideas from <a href="https://github.com/SelfControlApp/selfcontrol">SelfControl</a>.</p>
+      </div>
+      <div class="hood">
+        <div class="hood-item reveal"><code>/etc/hosts</code><h3>Name-level blocking</h3><p>Blocked domains and their <code style="margin:0;padding:1px 6px;font-size:11px">www</code> variants are pointed nowhere, inside clearly marked lines that get removed when the block ends.</p></div>
+        <div class="hood-item reveal"><code>pf firewall</code><h3>IP-level rules</h3><p>Resolved addresses are blocked in a dedicated packet-filter anchor and refreshed every five minutes. Other firewall rules on your Mac are left alone.</p></div>
+        <div class="hood-item reveal"><code>launchd daemon</code><h3>Enforcement that outlives the app</h3><p>A small privileged helper holds the timer, restores the block after a reboot, and removes every change it made when time runs out.</p></div>
+        <div class="hood-item reveal"><code>Developer ID</code><h3>Signed &amp; notarized</h3><p>Each release is signed with Developer ID, notarized by Apple and published with SHA-256 checksums. It opens like any other Mac app, with no Gatekeeper workarounds.</p></div>
+      </div>
+      <p class="honest reveal"><strong>What it won't do:</strong> Harbour Control is a focus tool, not a security boundary. An administrator who is determined to get around it can, and VPNs, proxies or custom encrypted DNS can reduce website coverage. It's built to stop the reflexive tab-switch, not a determined sysadmin.</p>
+    </div>
+  </section>
+
+  <section class="light how" id="faq">
+    <div class="wrap">
+      <div class="reveal" style="text-align:center">
+        <span class="kicker">FAQ</span>
+        <h2>Questions, <em>answered.</em></h2>
+      </div>
+      <div class="faq">
+        <details><summary>Is it really free?</summary><p>Yes. Harbour Control is free and MIT licensed. There's no trial, no Pro tier and no account. It's a side project that gets updated now and then.</p></details>
+        <details><summary>Can I stop a block early?</summary><p>Not from the app. That's the whole idea. Quitting, restarting or deleting the app won't end a session. For a real malfunction, an administrator can unload the daemon with <code>sudo launchctl bootout system/com.harbour.daemon</code>. The <a href="https://github.com/garrrikkotua/harbour-app/blob/main/docs/RELEASING.md#recovery">recovery guide</a> covers the details.</p></details>
+        <details><summary>Why does it need my admin password?</summary><p>Blocking every browser means editing <code>/etc/hosts</code>, adding firewall rules and installing a small background helper, and all of these need administrator rights. The password goes to macOS's own authorization prompt. Harbour Control never sees or stores it.</p></details>
+        <details><summary>Will blocked apps lose my unsaved work?</summary><p>Blocked apps are closed about once a second while a session runs, so save your work in them before you start. System recovery tools are never blocked.</p></details>
+        <details><summary>Which Macs does it support?</summary><p>macOS 13 Ventura or later, on both Apple Silicon and Intel. The download is a single universal app.</p></details>
+        <details><summary>How do I update or uninstall?</summary><p>Choose <em>Harbour Control → Check for Updates…</em> to open the latest release, then replace the app when no block is running. To uninstall, wait until the current block ends and move the app to the Trash.</p></details>
+      </div>
+    </div>
+  </section>
+
+  <section class="night final">
+    <div class="stars" data-stars="60"></div>
+    <div class="wrap reveal">
+      <img class="brand-icon" src="assets/icon.png" alt="Harbour Control app icon" width="96" height="96">
+      <h2>Your next deep-work hour<br><em>starts here.</em></h2>
+      <p class="lede">Free download. No sign-up. About a minute to install.</p>
+      <div class="cta">
+        <a class="btn btn-primary" href="https://github.com/garrrikkotua/harbour-app/releases/latest/download/Harbour-Control-latest.dmg">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.37 12.6c-.02-2.2 1.8-3.26 1.88-3.31-1.03-1.5-2.62-1.7-3.18-1.73-1.35-.14-2.64.8-3.33.8-.69 0-1.74-.78-2.87-.76-1.47.02-2.83.86-3.59 2.18-1.53 2.66-.39 6.6 1.1 8.76.73 1.06 1.6 2.24 2.73 2.2 1.1-.04 1.51-.71 2.84-.71 1.32 0 1.7.71 2.86.69 1.18-.02 1.93-1.07 2.65-2.13.84-1.22 1.18-2.41 1.2-2.47-.03-.01-2.3-.88-2.33-3.52zM14.2 6.13c.6-.73 1.01-1.75.9-2.76-.87.04-1.92.58-2.54 1.31-.56.64-1.05 1.67-.92 2.66.97.08 1.96-.49 2.56-1.21z"/></svg>
+          Download for Mac
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/garrrikkotua/harbour-app/releases">All releases</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>© 2026 Pairmind Limited · MIT License</span>
+    <span><a href="https://github.com/garrrikkotua/harbour-app">GitHub</a> · <a href="https://github.com/garrrikkotua/harbour-app/issues">Report an issue</a> · <a href="https://github.com/garrrikkotua/harbour-app/releases">Releases</a></span>
+  </div>
+</footer>
+
+<script>
+// Starfields
+document.querySelectorAll('[data-stars]').forEach(function (el) {
+  var n = +el.dataset.stars, html = '';
+  for (var i = 0; i < n; i++) {
+    var s = Math.random() < .15 ? 3 : 2;
+    html += '<i style="left:' + (Math.random() * 100).toFixed(2) + '%;top:' + (Math.random() * 85).toFixed(2) +
+      '%;width:' + s + 'px;height:' + s + 'px;--d:' + (3 + Math.random() * 5).toFixed(1) + 's;--delay:-' +
+      (Math.random() * 6).toFixed(1) + 's"></i>';
+  }
+  el.innerHTML = html;
+});
+
+// Live countdown in the hero mockup
+(function () {
+  var total = 2 * 3600, left = 74 * 60 + 32;
+  var end = new Date(Date.now() + left * 1000);
+  var clock = document.getElementById('clock'), bar = document.getElementById('progress');
+  document.getElementById('ends').textContent = 'Ends ' +
+    end.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) + ' · ' +
+    end.toLocaleDateString('en-US', { day: 'numeric', month: 'long', year: 'numeric' });
+  function pad(n) { return String(n).padStart(2, '0'); }
+  function tick() {
+    if (left <= 0) left = total;
+    clock.textContent = pad(Math.floor(left / 3600)) + ':' + pad(Math.floor(left % 3600 / 60)) + ':' + pad(left % 60);
+    bar.style.width = ((1 - left / total) * 100).toFixed(2) + '%';
+    left--;
+  }
+  tick(); setInterval(tick, 1000);
+})();
+
+// Latest version badge
+fetch('https://api.github.com/repos/garrrikkotua/harbour-app/releases/latest')
+  .then(function (r) { return r.ok ? r.json() : null; })
+  .then(function (d) { if (d && d.tag_name) document.getElementById('version').textContent = d.tag_name; })
+  .catch(function () {});
+
+// Scroll reveal
+(function () {
+  var els = document.querySelectorAll('.reveal');
+  if (!('IntersectionObserver' in window)) { els.forEach(function (e) { e.classList.add('in'); }); return; }
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+  }, { threshold: .12 });
+  els.forEach(function (e) { io.observe(e); });
+})();
+</script>
+</body>
+</html>
