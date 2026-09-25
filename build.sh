@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 CONFIG="${CONFIG:-release}"
 UNIVERSAL="${UNIVERSAL:-1}"
-VERSION="${VERSION:-0.3.0}"
+VERSION="${VERSION:-0.3.1}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 SIGNING_IDENTITY="${SIGNING_IDENTITY:--}"
 APP_DIR="build/Harbour Control.app"

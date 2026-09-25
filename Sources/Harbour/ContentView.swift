@@ -460,9 +460,26 @@ private struct DomainSection: View {
                 } else {
                     list
                 }
+
+                let shared = Safety.sharedNetworks(in: manager.config.domains)
+                if !shared.isEmpty {
+                    CardDivider()
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(shared, id: \.owner) { network in
+                            HintLine(
+                                hint: FieldHint(kind: .info, text: "\(network.owner) services share servers, so \(network.sideEffects) may also stop loading."),
+                                infoColor: Theme.amber
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .transition(.opacity)
+                }
             }
         }
         .animation(.easeOut(duration: 0.2), value: hint)
+        .animation(.easeOut(duration: 0.2), value: Safety.sharedNetworks(in: manager.config.domains).map(\.owner))
         // Typing clears the last message; clearing the field after a
         // successful add must not.
         .onChange(of: newDomain) { text in

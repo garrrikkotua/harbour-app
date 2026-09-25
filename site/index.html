@@ -546,7 +546,7 @@ footer a:hover { color: var(--parchment-warm); }
       </div>
       <div class="hood">
         <div class="hood-item reveal"><code>/etc/hosts</code><h3>Name-level blocking</h3><p>Blocked domains and their <code style="margin:0;padding:1px 6px;font-size:11px">www</code> variants are pointed nowhere, inside clearly marked lines that get removed when the block ends.</p></div>
-        <div class="hood-item reveal"><code>pf firewall</code><h3>IP-level rules</h3><p>Resolved addresses are blocked in a dedicated packet-filter anchor and refreshed every five minutes. Other firewall rules on your Mac are left alone.</p></div>
+        <div class="hood-item reveal"><code>pf firewall</code><h3>IP-level rules</h3><p>Resolved addresses are blocked in a dedicated packet-filter anchor and refreshed every five minutes. Shared hosting like Cloudflare or Vercel is skipped, so one blocked site never takes its neighbours down. Other firewall rules on your Mac are left alone.</p></div>
         <div class="hood-item reveal"><code>launchd daemon</code><h3>Enforcement that outlives the app</h3><p>A small privileged helper holds the timer, restores the block after a reboot, and removes every change it made when time runs out.</p></div>
         <div class="hood-item reveal"><code>Developer ID</code><h3>Signed &amp; notarized</h3><p>Each release is signed with Developer ID, notarized by Apple and published with SHA-256 checksums. It opens like any other Mac app, with no Gatekeeper workarounds.</p></div>
       </div>

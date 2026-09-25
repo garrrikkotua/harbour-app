@@ -30,7 +30,7 @@ Use **Harbour Control → Check for Updates…** to open the latest GitHub relea
 
 ## What to expect
 
-Website blocking covers the domain you enter and its `www` variant. Add other subdomains explicitly or choose a preset. IP rules update every five minutes. Secure DNS endpoints are blocked during website sessions, while ordinary DNS on port 53 remains available.
+Website blocking covers the domain you enter and its `www` variant. Add other subdomains explicitly or choose a preset. IP rules update every five minutes. Addresses on shared hosting and CDNs (Cloudflare, Fastly, Vercel, CloudFront, AWS Global Accelerator) are never IP-blocked, because they also serve unrelated sites; those sites are blocked by name only. Refresh the list with `scripts/update-shared-hosting.py`. Secure DNS endpoints are blocked during website sessions, while ordinary DNS on port 53 remains available.
 
 This is a focus tool, not a security boundary against an administrator. VPNs, proxies, custom encrypted DNS, and changing CDN addresses can affect coverage. Sites sharing a blocked IP may also be affected. Blocking a Meta service can affect other Meta services because their network ranges overlap. Firewall activation can interrupt existing network connections.
 

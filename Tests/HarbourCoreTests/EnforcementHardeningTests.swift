@@ -38,10 +38,41 @@ final class NetworkSafetyTests: XCTestCase {
         // Blocking the whole resolver address would kill ordinary DNS on
         // Macs configured to use 1.1.1.1 / 8.8.8.8.
         let result = NetworkSafety.blockableIPs(
-            from: ["1.1.1.1", "104.16.1.1", "127.0.0.1"],
+            from: ["1.1.1.1", "157.240.0.35", "127.0.0.1"],
             keepReachable: ["1.1.1.1", "8.8.8.8"]
         )
-        XCTAssertEqual(result, ["104.16.1.1"])
+        XCTAssertEqual(result, ["157.240.0.35"])
+    }
+
+    func test_blockableIPs_skipsSharedHosting() {
+        // Vercel (revenuecat.com and app.octolens.com share 216.150.1.x),
+        // Cloudflare, Fastly and CloudFront serve unrelated sites from one IP.
+        let result = NetworkSafety.blockableIPs(
+            from: ["216.150.1.1", "76.76.21.21", "104.16.132.229", "151.101.1.140",
+                   "2606:4700::6810:84e5", "142.250.74.46"],
+            keepReachable: []
+        )
+        XCTAssertEqual(result, ["142.250.74.46"])
+    }
+}
+
+final class SharedHostingTests: XCTestCase {
+
+    func test_prefixBoundaries() {
+        XCTAssertTrue(SharedHosting.contains("104.16.0.0"))      // Cloudflare 104.16.0.0/13
+        XCTAssertTrue(SharedHosting.contains("104.23.255.255"))
+        XCTAssertFalse(SharedHosting.contains("104.15.255.255"))
+        XCTAssertTrue(SharedHosting.contains("216.150.1.65"))    // Vercel 216.150.1.0/24
+        XCTAssertFalse(SharedHosting.contains("216.150.2.1"))
+        XCTAssertTrue(SharedHosting.contains("2606:4700::1"))    // Cloudflare IPv6
+    }
+
+    func test_ownNetworks_andGarbage_areNotShared() {
+        // Google, Meta and X run their own networks; blocking them only
+        // affects their own services, which the confirm sheet warns about.
+        for ip in ["157.240.0.35", "142.250.74.46", "104.244.42.1", "192.168.1.1", "", "not-an-ip"] {
+            XCTAssertFalse(SharedHosting.contains(ip), ip)
+        }
     }
 }
 

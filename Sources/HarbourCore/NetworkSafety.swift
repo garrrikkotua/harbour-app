@@ -28,12 +28,15 @@ public enum NetworkSafety {
 
     /// Filters resolver output down to addresses that may be fully blocked.
     /// `keepReachable` holds addresses that are only blocked on specific ports
-    /// (the DoH resolvers, whose port 53 must keep working).
+    /// (the DoH resolvers, whose port 53 must keep working). Shared hosting and
+    /// CDN addresses are left alone because they also serve unrelated sites.
     public static func blockableIPs<S: Sequence>(
         from candidates: S,
         keepReachable: Set<String>
     ) -> Set<String> where S.Element == String {
-        Set(candidates.filter { isBlockableResolvedIP($0) && !keepReachable.contains($0) })
+        Set(candidates.filter {
+            isBlockableResolvedIP($0) && !keepReachable.contains($0) && !SharedHosting.contains($0)
+        })
     }
 
     private static func isPublicIPv4(_ b: [UInt8]) -> Bool {

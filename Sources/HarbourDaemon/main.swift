@@ -379,14 +379,15 @@ func applyPF(domains: [String]) {
     for d in candidates {
         let resolved = resolveIPs(for: d)
         // Never blanket-block loopback, LAN, link-local or multicast answers
-        // (sinkhole resolvers, split-horizon DNS), nor the DoH resolvers whose
-        // port 53 must stay reachable. /etc/hosts still covers these names.
+        // (sinkhole resolvers, split-horizon DNS), the DoH resolvers whose
+        // port 53 must stay reachable, or shared CDN / hosting addresses that
+        // also serve unrelated sites. /etc/hosts still covers these names.
         let blockable = NetworkSafety.blockableIPs(from: resolved, keepReachable: Set(alwaysBlockIPs))
         if resolved.isEmpty {
             log("pf: could not resolve \(d)")
         } else {
             resolvedAny = true
-            log("pf: \(d) -> \(resolved.count) IPs (\(resolved.count - blockable.count) skipped as local/resolver)")
+            log("pf: \(d) -> \(resolved.count) IPs (\(resolved.count - blockable.count) skipped as local, resolver or shared hosting)")
         }
         freshIPs.formUnion(blockable)
 
