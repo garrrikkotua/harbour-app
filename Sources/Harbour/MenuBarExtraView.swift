@@ -193,9 +193,11 @@ private struct ActiveMenuPanel: View {
                 Image(systemName: "square.grid.2x2")
             }
             Spacer(minLength: 0)
-            Text("add-only")
-                .font(Theme.sans(size: 10, weight: .medium))
+            let tried = manager.sessionAttempts
+            Text("\(tried) \(tried == 1 ? "attempt" : "attempts") stopped")
+                .font(Theme.sans(size: 10.5, weight: .medium))
                 .foregroundStyle(.tertiary)
+                .monospacedDigit()
         }
         .labelStyle(CompactLabelStyle())
         .font(Theme.sans(size: 12, weight: .medium))

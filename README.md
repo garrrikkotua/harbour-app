@@ -17,7 +17,7 @@ A free, open-source macOS focus app by Igor Kotua. Block distracting websites an
 
 Releases from v0.2.0 onward are Developer ID-signed and notarized by Apple. v0.1.0 was unsigned.
 
-Use **Harbour Control → Check for Updates…** to open the latest GitHub release. Updates are installed manually when no block is active. Checksums are included with new releases in `SHA256SUMS.txt`.
+From 0.4.0, Harbour Control updates itself. It checks GitHub once a day and offers each new signed release; **Harbour Control → Check for Updates…** checks now, and **Install Updates Automatically** installs them without asking. Updates are verified with an EdDSA signature and Apple notarization. An update never ends or changes a running block. Earlier versions update manually from the latest release. Checksums are included with new releases in `SHA256SUMS.txt`.
 
 ## Features
 
@@ -27,6 +27,7 @@ Use **Harbour Control → Check for Updates…** to open the latest GitHub relea
 - Background enforcement that resumes after reboot.
 - Add more websites and apps during a session; accepted additions persist across daemon restarts.
 - App-only sessions leave network configuration alone.
+- Attempt stats: every time you try to open a blocked website or app is counted, per day and per target, with a 14-day chart and your most-tried distractions.
 
 ## What to expect
 
@@ -34,13 +35,17 @@ Website blocking covers the domain you enter and its `www` variant. Add other su
 
 This is a focus tool, not a security boundary against an administrator. VPNs, proxies, custom encrypted DNS, and changing CDN addresses can affect coverage. Sites sharing a blocked IP may also be affected. Blocking a Meta service can affect other Meta services because their network ranges overlap. Firewall activation can interrupt existing network connections.
 
+Attempts are counted once per burst: one page load or app relaunch within a few seconds is one attempt. Website attempts are counted when the browser uses the system resolver; browsers with their own secure DNS or a VPN can skip the count while still being blocked. Apps already open when a block starts are closed without counting.
+
 Blocked apps are terminated approximately once a second. Save work before starting a block. System recovery tools are excluded. Moving or renaming an app can bypass path-based enforcement.
 
 ## Privacy and storage
 
-Settings and runtime additions are stored in `~/Library/Application Support/Harbour/`. Active state is stored in `/var/db/harbour/state.json`. The helper is installed to `/Library/PrivilegedHelperTools/com.harbour.daemon`, with a launchd job at `/Library/LaunchDaemons/com.harbour.daemon.plist`.
+Settings and runtime additions are stored in `~/Library/Application Support/Harbour/`. Active state is stored in `/var/db/harbour/state.json`, and attempt stats in `/var/db/harbour/stats.json` (kept across blocks, 400 days of history).
 
-Harbour has no analytics or account service. Website icons are requested from Google's favicon service, which receives the requested hostname. Website enforcement makes DNS queries; normal network providers can observe those. Diagnostics in `/var/log/harbour-daemon.log` can contain blocked domains and app paths.
+During a website block, blocked names resolve to `127.72.66.1`, a loopback alias the daemon adds for the session. Its listener reads only the requested hostname (TLS SNI or HTTP `Host`), resets the connection and counts it; nothing is served, logged beyond the domain, or sent anywhere. Local servers on `127.0.0.1` are unaffected. If the alias or ports 80/443 are unavailable, Harbour falls back to the `0.0.0.0` null route without counting. The helper is installed to `/Library/PrivilegedHelperTools/com.harbour.daemon`, with a launchd job at `/Library/LaunchDaemons/com.harbour.daemon.plist`.
+
+Harbour has no analytics or account service. The updater fetches `appcast.xml` from GitHub Releases once a day without sending system details; turn this off with **Check for Updates Automatically**. Website icons are requested from Google's favicon service, which receives the requested hostname. Website enforcement makes DNS queries; normal network providers can observe those. Diagnostics in `/var/log/harbour-daemon.log` can contain blocked domains and app paths.
 
 ## Uninstall
 

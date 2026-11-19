@@ -30,5 +30,7 @@ xcrun stapler staple "$DMG"
 xcrun stapler validate "$DMG"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$OUT/Harbour-Control-$VERSION.zip"
 cp "$DMG" "$OUT/Harbour-Control-latest.dmg"
+# Sparkle appcast for in-app updates (EdDSA-signs the ZIP).
+./scripts/make-appcast.sh
 (cd "$OUT" && shasum -a 256 "Harbour-Control-$VERSION.dmg" "Harbour-Control-$VERSION.zip" Harbour-Control-latest.dmg > SHA256SUMS.txt)
 echo "Signed and notarized installers: $OUT"

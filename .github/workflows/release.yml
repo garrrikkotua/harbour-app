@@ -43,7 +43,6 @@ jobs:
           VERSION="${MANUAL_VERSION:-${GITHUB_REF_NAME#v}}"
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "BUILD_NUMBER=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
       - name: Test
         run: swift test
@@ -74,7 +73,12 @@ jobs:
       - name: Build, sign, notarize, and package
         env:
           SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: ./scripts/package-release.sh
+          # EdDSA key that signs the Sparkle appcast; without it installed
+          # apps could not verify the update, so the release must not publish.
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          [[ -n "$SPARKLE_PRIVATE_KEY" ]] || { echo "::error::Missing release secret: SPARKLE_PRIVATE_KEY"; exit 1; }
+          ./scripts/package-release.sh
       - uses: actions/upload-artifact@v4
         with:
           name: Harbour-Control-${{ env.VERSION }}
@@ -96,6 +100,7 @@ jobs:
             Signed with Developer ID and notarized by Apple. Universal build for Apple Silicon and Intel, macOS 13 or later.
             Administrator authorization is required to start a block. Active blocks last until their timer expires.
             SHA-256 checksums are included in SHA256SUMS.txt.
+            Harbour Control 0.4.0 and later update themselves from the attached appcast.xml.
       - name: Remove signing credentials
         if: always()
         run: |

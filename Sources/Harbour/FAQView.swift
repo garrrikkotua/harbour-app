@@ -58,6 +58,22 @@ struct FAQView: View {
                 The lighthouse in your menu bar shows the time left; click it for the full status. The main window shows the same countdown with the end time.
                 """
             ),
+            FAQItem(
+                symbol: "chart.bar",
+                q: "What counts as an attempt?",
+                a: """
+                Each time you try to open a blocked website or app during a block. A page load or an app relaunch within a few seconds counts once. Apps that were already open when the block started are closed without counting.
+
+                See your history with the chart button. Browsers using their own secure DNS, or a VPN, can skip the count; the block still applies.
+                """
+            ),
+            FAQItem(
+                symbol: "arrow.down.circle",
+                q: "How do updates work?",
+                a: """
+                Harbour Control checks for a new signed release once a day and offers to install it. Turn on **Install Updates Automatically** in the Harbour Control menu to skip the prompt. Updating never ends or changes a running block.
+                """
+            ),
         ]),
         FAQGroup(title: "What gets blocked", items: [
             FAQItem(
@@ -126,11 +142,13 @@ struct FAQView: View {
 
                 Active block: `/var/db/harbour/state.json` (removed when the timer ends)
 
+                Attempt stats: `/var/db/harbour/stats.json` (kept between blocks, stays on this Mac)
+
                 Daemon: `/Library/PrivilegedHelperTools/com.harbour.daemon` and `/Library/LaunchDaemons/com.harbour.daemon.plist`
 
                 Log: `/var/log/harbour-daemon.log`
 
-                There are no analytics. Website icons come from Google's favicon service, which sees the hostname.
+                There are no analytics. Website icons come from Google's favicon service, which sees the hostname. The update check downloads a small file from GitHub once a day.
                 """
             ),
         ]),

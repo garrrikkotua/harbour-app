@@ -190,6 +190,10 @@ func log(_ msg: String) {
 
 // MARK: - Hosts file (marker handling in HarbourCore)
 
+/// IPv4 address blocked names resolve to: the attempt-counting sink once it
+/// listens, otherwise the 0.0.0.0 null route.
+var hostsIPv4Sink = "0.0.0.0"
+
 func applyHosts(domains: [String]) {
     guard !domains.isEmpty else { return }
     guard let hosts = try? String(contentsOfFile: hostsFile, encoding: .utf8) else {
@@ -205,7 +209,8 @@ func applyHosts(domains: [String]) {
     // 30-second refresh skip the rewrite and the DNS cache flush when nothing
     // changed, instead of HUPing mDNSResponder ~2,900 times a day.
     let all = Array(Set(domains + alwaysBlockDomains)).sorted()
-    let addition = HostsMarker.buildHostsBlock(domains: all, start: markerStart, end: markerEnd)
+    let addition = HostsMarker.buildHostsBlock(domains: all, start: markerStart, end: markerEnd,
+                                               ipv4Sink: hostsIPv4Sink)
     let updated = cleaned + addition
     if updated == hosts { return }
 
@@ -593,19 +598,25 @@ func processOwnerUID(_ pid: pid_t) -> uid_t? {
 /// Expands blocked bundle paths into the paths the kernel will actually
 /// report: a symlinked bundle (e.g. /Applications/Safari.app → cryptex) is
 /// matched through its resolved location too.
-func enforcementTargets(for paths: [String]) -> [String] {
+/// Each target keeps the blocked bundle path it came from, so attempts are
+/// counted against the app the user picked.
+func enforcementTargets(for paths: [String]) -> [(target: String, bundle: String)] {
     var seen = Set<String>()
-    return paths.flatMap { path -> [String] in
+    return paths.flatMap { path -> [(target: String, bundle: String)] in
         let resolved = realpath(path, nil).map { ptr -> String in
             defer { free(ptr) }
             return String(cString: ptr)
         }
         return Safety.enforcementTargets(bundlePath: path, resolvedPath: resolved)
-    }.filter { seen.insert($0).inserted }
+            .map { (target: $0, bundle: path) }
+    }.filter { seen.insert($0.target).inserted }
 }
 
-func killBlockedApps(targets: [String]) {
-    guard !targets.isEmpty else { return }
+/// Returns the blocked bundle paths that had a process terminated.
+@discardableResult
+func killBlockedApps(targets: [(target: String, bundle: String)]) -> Set<String> {
+    var killed = Set<String>()
+    guard !targets.isEmpty else { return killed }
     let ownPID = getpid()
     for (pid, procPath) in listProcesses() {
         // Never kill system-critical or low-numbered PIDs, or ourselves.
@@ -613,7 +624,7 @@ func killBlockedApps(targets: [String]) {
         if pid == ownPID { continue }
         if isCriticalPath(procPath) { continue }
 
-        for target in targets {
+        for (target, bundle) in targets {
             // Sanity: refuse to kill based on a critical target too.
             if isCriticalPath(target) { continue }
             // Match any process whose path is inside the .app bundle
@@ -622,11 +633,13 @@ func killBlockedApps(targets: [String]) {
                 guard let uid = processOwnerUID(pid), Safety.mayTerminate(processOwnerUID: uid) else { break }
                 if kill(pid, SIGKILL) == 0 {
                     log("killed pid=\(pid) path=\(procPath)")
+                    killed.insert(bundle)
                 }
                 break
             }
         }
     }
+    return killed
 }
 
 // MARK: - State
@@ -646,6 +659,7 @@ func fullCleanup() {
     log("cleanup: removing hosts + pf rules + state")
     removeHosts()
     removePF()
+    stopAttemptTracking()
     try? FileManager.default.removeItem(atPath: stateFile)
     try? FileManager.default.removeItem(atPath: plistPath)
     // The GUI owns its additions file and removes it after observing expiry.
@@ -674,6 +688,22 @@ func liftNetworkRulesKeepingState() {
     log("termination: removing hosts + pf rules, keeping state so the block resumes at next launch")
     removeHosts()
     removePF()
+    stopAttemptTracking()
+}
+
+/// Set once the block is running; nil during startup cleanup.
+var attemptRecorder: AttemptRecorder?
+var attemptSink: AttemptSink?
+
+func stopAttemptTracking() {
+    if let sink = attemptSink {
+        sink.stop()
+    } else {
+        // A crashed earlier run may have left the loopback alias behind.
+        AttemptSink.removeAlias()
+    }
+    attemptSink = nil
+    attemptRecorder?.flush(force: true)
 }
 
 // MARK: - Signal handling
@@ -722,6 +752,27 @@ for (i, path) in state.blockedPaths.enumerated() where Safety.isBlockableAppPath
 /// matches against. Recomputed on additions and every 30 s (an app may be
 /// installed or moved mid-session).
 var killTargets = enforcementTargets(for: effectivePaths)
+
+// Attempt counting. Apps found running in the first seconds were open when
+// the block started (or restored at login after a reboot), not attempts.
+let recorder = AttemptRecorder(sessionStart: state.startTime)
+attemptRecorder = recorder
+recorder.setBlockedDomains(effectiveDomains)
+recorder.suppressApps(effectivePaths)
+/// Starts the website sink once there is a website to block (an app-only
+/// block leaves networking alone until a site is added).
+var sinkAttempted = false
+func startSinkIfNeeded() {
+    guard !sinkAttempted, !effectiveDomains.isEmpty else { return }
+    sinkAttempted = true
+    let sink = AttemptSink(onHost: { recorder.recordHost($0) })
+    if sink.start() {
+        attemptSink = sink
+        hostsIPv4Sink = AttemptSink.address
+    }
+}
+startSinkIfNeeded()
+recorder.flush(force: true)
 
 applyHosts(domains: effectiveDomains)
 log("block active: \(state.domains.count) domains, \(state.blockedPaths.count) apps, ends at \(state.endTime)")
@@ -794,6 +845,10 @@ func reloadAdditionsIfChanged() -> Bool {
     }
     if effectivePaths.count != origPathCount {
         killTargets = enforcementTargets(for: effectivePaths)
+        recorder.suppressApps(Array(effectivePaths[origPathCount...]))
+    }
+    if effectiveDomains.count != origDomainCount {
+        recorder.setBlockedDomains(effectiveDomains)
     }
 
     let newD = effectiveDomains.count - origDomainCount
@@ -814,11 +869,15 @@ func reloadAdditionsIfChanged() -> Bool {
 // Re-apply hosts + pf periodically in case something overwrites them or IPs change
 var tick = 0
 while Date() < state.endTime && !terminationRequested {
-    killBlockedApps(targets: killTargets)
+    for bundle in killBlockedApps(targets: killTargets) {
+        recorder.recordApp(bundle)
+    }
+    recorder.flush()
     tick += 1
 
     // Check additions file — cheap stat call, only triggers work on change.
     if reloadAdditionsIfChanged() {
+        startSinkIfNeeded()
         applyHosts(domains: effectiveDomains)
         schedulePF(force: true)
     }
@@ -832,7 +891,7 @@ while Date() < state.endTime && !terminationRequested {
         var nearMiss: [String] = []
         for (pid, p) in procs {
             var hit = false
-            for t in killTargets where Safety.matchesApp(executable: p, bundlePath: t) {
+            for (t, _) in killTargets where Safety.matchesApp(executable: p, bundlePath: t) {
                 matchCount += 1; hit = true; break
             }
             if !hit {

@@ -16,9 +16,9 @@ import HarbourCore
 //                              `harbour.didOnboard` flag (the flag is not changed).
 //   HARBOUR_DEMO_STEP=1…4      With HARBOUR_DEMO_ONBOARDING=1: skip the intro and
 //                              open that onboarding step directly.
-//   HARBOUR_DEMO_SHEET=confirm|faq|apps
+//   HARBOUR_DEMO_SHEET=confirm|faq|apps|stats
 //                              With HARBOUR_DEMO set: open that sheet over the
-//                              setup (faq/apps also over the active) screen.
+//                              setup (faq/apps/stats also over the active) screen.
 //
 // e.g. HARBOUR_DEMO=active "build/Harbour Control.app/Contents/MacOS/Harbour"
 enum DemoMode: Equatable {
@@ -56,7 +56,7 @@ enum DemoMode: Equatable {
     static let showsPopover: Bool =
         current != nil && ProcessInfo.processInfo.environment["HARBOUR_DEMO_POPOVER"] == "1"
 
-    enum Sheet: String { case confirm, faq, apps }
+    enum Sheet: String { case confirm, faq, apps, stats }
 
     /// Sheet to present on appear — demo mode only, so a real install can
     /// never be nudged towards the confirmation dialog.
@@ -74,10 +74,14 @@ final class BlockManager: ObservableObject {
     @Published var currentState: BlockState?
     @Published var currentAdditions: BlockAdditions = BlockAdditions()
     @Published var remainingSeconds: Int = 0
+    /// Blocked open attempts, written by the daemon.
+    @Published var attemptStats = AttemptStats()
 
     private let configURL: URL
     private let additionsURL: URL
     private let stateFile = "/var/db/harbour/state.json"
+    private let statsFile = "/var/db/harbour/stats.json"
+    private var statsMtime: Date?
     private var timer: Timer?
 
     /// Demo-only in-memory block; nil outside demo mode or when demo-idle.
@@ -94,6 +98,7 @@ final class BlockManager: ObservableObject {
 
         loadConfig()
         if demo == .active { demoState = Self.makeDemoState() }
+        if demo != nil { attemptStats = Self.makeDemoStats(session: demoState) }
         refreshState()
 
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
@@ -161,7 +166,28 @@ final class BlockManager: ObservableObject {
         try? data.write(to: configURL, options: .atomic)
     }
 
+    /// Attempts during the running block (0 when idle).
+    var sessionAttempts: Int {
+        guard let s = currentState else { return 0 }
+        return attemptStats.session(startingAt: s.startTime).total
+    }
+
+    /// Re-reads the stats file only when the daemon has rewritten it.
+    private func refreshStats() {
+        guard demo == nil else { return }
+        let mtime = (try? FileManager.default.attributesOfItem(atPath: statsFile))?[.modificationDate] as? Date
+        guard mtime != statsMtime else { return }
+        statsMtime = mtime
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: statsFile)) else { return }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        if let stats = try? decoder.decode(AttemptStats.self, from: data), stats != attemptStats {
+            attemptStats = stats
+        }
+    }
+
     func refreshState() {
+        refreshStats()
         // Only publish when something actually changed — this runs every
         // second and every assignment to a @Published property re-renders
         // the window and the menu bar label.
@@ -292,6 +318,33 @@ final class BlockManager: ObservableObject {
     }
 
     // MARK: - Demo fixtures
+
+    private static func makeDemoStats(session: BlockState?) -> AttemptStats {
+        var stats = AttemptStats()
+        let now = Date()
+        let start = session?.startTime ?? now.addingTimeInterval(-3600)
+        let sites = ["youtube.com", "x.com", "reddit.com", "instagram.com", "news.ycombinator.com"]
+        let apps = ["/Applications/Telegram.app", "/Applications/Slack.app"]
+            .filter { FileManager.default.fileExists(atPath: $0) }
+        var rng = SystemRandomNumberGenerator()
+        for day in 1..<21 {
+            let when = now.addingTimeInterval(-Double(day) * 86_400)
+            for _ in 0..<Int.random(in: 0...14, using: &rng) {
+                stats.record(.site, key: sites.randomElement(using: &rng)!, at: when, sessionStart: when)
+            }
+            for _ in 0..<Int.random(in: 0...3, using: &rng) where !apps.isEmpty {
+                stats.record(.app, key: apps.randomElement(using: &rng)!, at: when, sessionStart: when)
+            }
+        }
+        for (i, site) in sites.prefix(3).enumerated() {
+            for _ in 0..<(5 - i) { stats.record(.site, key: site, at: now, sessionStart: start) }
+        }
+        if let app = apps.first {
+            stats.record(.app, key: app, at: now, sessionStart: start)
+            stats.record(.app, key: app, at: now, sessionStart: start)
+        }
+        return stats
+    }
 
     private static func makeDemoState() -> BlockState {
         let now = Date()
