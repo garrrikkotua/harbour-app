@@ -281,6 +281,7 @@ private struct ActiveMenuPanel: View {
 /// Deep-navy card with a twinkling sky, a sweeping beam and the lit
 /// lighthouse above a serif countdown. Mirrors the landing page hero.
 private struct NightCard: View {
+    @Environment(\.windowVisible) private var windowVisible
     @ObservedObject var manager: BlockManager
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -293,7 +294,7 @@ private struct NightCard: View {
 
             // Sky + beam + lighthouse share one clock. Paused under Reduce
             // Motion (a still, softly lit scene instead).
-            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { timeline in
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion || !windowVisible)) { timeline in
                 let t = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
                 ZStack(alignment: .top) {
                     NightSky(time: t)

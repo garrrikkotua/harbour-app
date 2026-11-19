@@ -13,6 +13,7 @@ import AppKit
 ///   bright beam flashes across once before the steady sweep fades in.
 /// Reduce Motion (or `animated == false`) freezes it in its lit pose.
 struct LighthouseIcon: View {
+    @Environment(\.windowVisible) private var windowVisible
     var size: CGFloat = 120
     var beamColor: Color = Theme.beam
     /// Lamp glow breathes (3 s cycle).
@@ -42,7 +43,7 @@ struct LighthouseIcon: View {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !isLive)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !isLive || !windowVisible)) { context in
             let frame = Frame(date: context.date, view: self)
             ZStack {
                 if lit {
@@ -171,6 +172,7 @@ struct LighthouseIcon: View {
 /// Twinkling starfield. Stars are placed deterministically so the sky does
 /// not reshuffle between launches; each one has its own period and phase.
 struct StarfieldView: View {
+    @Environment(\.windowVisible) private var windowVisible
     var count: Int = 36
     /// Portion of the height (from the top) that stars occupy.
     var heightFraction: CGFloat = 0.62
@@ -212,7 +214,7 @@ struct StarfieldView: View {
         let live = animated && !reduceMotion
         let stars = stars
         let heightFraction = heightFraction
-        TimelineView(.animation(minimumInterval: 1.0 / 15, paused: !live)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 15, paused: !live || !windowVisible)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             Canvas { ctx, sz in
                 for s in stars {
@@ -234,13 +236,14 @@ struct StarfieldView: View {
 /// Two slow swells along the bottom edge with a faint lamp reflection,
 /// echoing the site's `.sea`.
 struct SeaWavesView: View {
+    @Environment(\.windowVisible) private var windowVisible
     var animated: Bool = true
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let live = animated && !reduceMotion
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !live)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !live || !windowVisible)) { context in
             let t = live ? context.date.timeIntervalSinceReferenceDate : 0
             Canvas { ctx, sz in
                 let w = sz.width
@@ -285,60 +288,6 @@ struct SeaWavesView: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
-    }
-}
-
-// MARK: - Window visibility
-
-extension View {
-    /// Keeps `isVisible` in sync with the hosting window's occlusion state so
-    /// ambient animations can pause while the window is hidden, minimised or
-    /// on another Space.
-    func trackingWindowVisibility(_ isVisible: Binding<Bool>) -> some View {
-        background(WindowOcclusionReader(isVisible: isVisible).frame(width: 0, height: 0))
-    }
-}
-
-private struct WindowOcclusionReader: NSViewRepresentable {
-    @Binding var isVisible: Bool
-
-    func makeNSView(context: Context) -> OcclusionTrackingView {
-        let view = OcclusionTrackingView()
-        view.onChange = { visible in
-            if isVisible != visible { isVisible = visible }
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: OcclusionTrackingView, context: Context) {}
-}
-
-private final class OcclusionTrackingView: NSView {
-    var onChange: ((Bool) -> Void)?
-    private var observer: NSObjectProtocol?
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        if let observer { NotificationCenter.default.removeObserver(observer) }
-        observer = nil
-        guard let window else { return }
-        observer = NotificationCenter.default.addObserver(
-            forName: NSWindow.didChangeOcclusionStateNotification,
-            object: window,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.report() }
-        }
-        // Defer: this runs inside a SwiftUI layout pass.
-        Task { @MainActor [weak self] in self?.report() }
-    }
-
-    private func report() {
-        onChange?(window?.occlusionState.contains(.visible) ?? false)
-    }
-
-    deinit {
-        if let observer { NotificationCenter.default.removeObserver(observer) }
     }
 }
 

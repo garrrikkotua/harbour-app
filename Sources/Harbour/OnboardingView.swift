@@ -523,6 +523,7 @@ private struct TopRoundedRectangle: Shape {
 
 /// Step 1: the lighthouse on its rock, beam sweeping over a gently moving sea.
 private struct WelcomeIllustration: View {
+    @Environment(\.windowVisible) private var windowVisible
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let markSize: CGFloat = 120
 
@@ -533,7 +534,7 @@ private struct WelcomeIllustration: View {
             let markCentre = CGPoint(x: w / 2, y: h - markSize / 2 - 4)
             let lamp = CGPoint(x: markCentre.x, y: markCentre.y + IntroLighthouse.lampOffset * markSize)
 
-            TimelineView(.animation(minimumInterval: nil, paused: reduceMotion)) { timeline in
+            TimelineView(.animation(minimumInterval: nil, paused: reduceMotion || !windowVisible)) { timeline in
                 let t = timeline.date.timeIntervalSinceReferenceDate
                 let sweep = reduceMotion ? 0 : 0.28 * sin(t * 2 * .pi / 7)
                 let breathe = reduceMotion ? 0.5 : 0.5 + 0.5 * sin(t * 2 * .pi / 3.2)
@@ -590,11 +591,12 @@ private struct WelcomeIllustration: View {
 
 /// Step 2: websites, apps and a duration dial, bobbing gently like buoys.
 private struct ChooseIllustration: View {
+    @Environment(\.windowVisible) private var windowVisible
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var appeared = false
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: nil, paused: reduceMotion)) { timeline in
+        TimelineView(.animation(minimumInterval: nil, paused: reduceMotion || !windowVisible)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
             HStack(alignment: .top, spacing: 38) {
                 tile(0, t: t, label: "Websites") {
@@ -787,10 +789,11 @@ private struct Shackle: Shape {
 /// Step 4: the macOS password prompt being filled in, and the lighthouse
 /// counting down in a miniature menu bar.
 private struct PermissionIllustration: View {
+    @Environment(\.windowVisible) private var windowVisible
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion || !windowVisible)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
             VStack(spacing: 22) {
                 menuBar(t: t)

@@ -63,4 +63,21 @@ public enum HostsMarker {
         out += "\(end)\n"
         return out
     }
+
+    /// Same block for an exact list of hostnames (see `RelatedDomains`): each
+    /// name is written as given, with no `www.` variant added.
+    public static func buildHostsBlock(
+        hostnames: [String],
+        start: String,
+        end: String,
+        ipv4Sink: String = "0.0.0.0"
+    ) -> String {
+        var out = "\n\(start)\n"
+        for name in hostnames where DomainValidation.isSafeDomain(name) {
+            out += "\(ipv4Sink)\t\(name)\n"
+            out += "::\t\(name)\n"
+        }
+        out += "\(end)\n"
+        return out
+    }
 }

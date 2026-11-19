@@ -208,8 +208,12 @@ func applyHosts(domains: [String]) {
     // Sorted so the block is byte-identical between refreshes; that lets the
     // 30-second refresh skip the rewrite and the DNS cache flush when nothing
     // changed, instead of HUPing mDNSResponder ~2,900 times a day.
-    let all = Array(Set(domains + alwaysBlockDomains)).sorted()
-    let addition = HostsMarker.buildHostsBlock(domains: all, start: markerStart, end: markerEnd,
+    // User domains also cover their mobile sites and the companion hosts a
+    // well-known site loads from (RelatedDomains), so a page restored from the
+    // browser's cache can't fetch its content either.
+    let all = Set(RelatedDomains.hostnames(for: domains)
+                  + RelatedDomains.hostnames(for: alwaysBlockDomains, includeRelated: false)).sorted()
+    let addition = HostsMarker.buildHostsBlock(hostnames: all, start: markerStart, end: markerEnd,
                                                ipv4Sink: hostsIPv4Sink)
     let updated = cleaned + addition
     if updated == hosts { return }

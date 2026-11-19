@@ -1273,7 +1273,7 @@ struct ActiveView: View {
     @State private var showAppPicker = false
     @State private var expanded = false
     @State private var newDomain = ""
-    @State private var windowVisible = true
+    @Environment(\.windowVisible) private var windowVisible
     /// When the lamp was lit (ignition), nil if the session was already running.
     @State private var ignitedAt: Date?
     @State private var revealed: Bool
@@ -1397,7 +1397,6 @@ struct ActiveView: View {
         }
         .frame(width: 520, height: 640)
         .environment(\.colorScheme, .dark)
-        .trackingWindowVisibility($windowVisible)
         .onAppear {
             guard !revealed else { return }
             // Let the lamp catch first, then bring the numbers up.
@@ -1449,6 +1448,7 @@ struct ActiveView: View {
 private struct Countdown: View {
     let seconds: Int
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.windowVisible) private var windowVisible
 
     var body: some View {
         let h = seconds / 3600, m = (seconds % 3600) / 60, s = seconds % 60
@@ -1459,7 +1459,9 @@ private struct Countdown: View {
             .foregroundStyle(Theme.nightText)
             .shadow(color: Theme.beam.opacity(0.18), radius: 14)
             .numericTransition(countsDown: true)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: seconds)
+            // The digit roll blurs a 56 pt shadowed string every second; skip it
+            // while the window is hidden.
+            .animation(reduceMotion || !windowVisible ? nil : .easeInOut(duration: 0.3), value: seconds)
             .accessibilityLabel("\(h) hours \(m) minutes \(s) seconds left")
     }
 }
@@ -1709,6 +1711,7 @@ private struct AddButtonStyle: ButtonStyle {
 
 /// Amber → lamp-glow progress with a rare glint and a glowing head.
 private struct ProgressTrack: View {
+    @Environment(\.windowVisible) private var windowVisible
     let progress: Double
     var animated: Bool = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1725,7 +1728,7 @@ private struct ProgressTrack: View {
                     .frame(width: width)
                     .overlay(alignment: .leading) {
                         if live {
-                            TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+                            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !windowVisible)) { context in
                                 // A faint 2.8 s glint every 12 s; resting the rest of
                                 // the time so it never reads as a loading bar.
                                 let cycle = context.date.timeIntervalSinceReferenceDate
@@ -1750,7 +1753,9 @@ private struct ProgressTrack: View {
                     .shadow(color: Theme.beam.opacity(0.9), radius: 5)
                     .offset(x: width - 7)
             }
-            .animation(.linear(duration: 0.9), value: progress)
+            // Ticks every second; skipped while hidden, since re-rendering the
+            // shadowed bar for 0.9 s of every second kept the CPU busy.
+            .animation(windowVisible ? .linear(duration: 0.9) : nil, value: progress)
         }
         .accessibilityElement()
         .accessibilityLabel("Progress")

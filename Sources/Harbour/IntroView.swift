@@ -22,6 +22,7 @@ enum IntroPalette {
 /// Every frame is a pure function of elapsed time, so skipping (click / Return)
 /// just moves the clock to the end state. Reduce Motion gets a plain fade.
 struct IntroView: View {
+    @Environment(\.windowVisible) private var windowVisible
     var onGetStarted: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -40,7 +41,7 @@ struct IntroView: View {
 
     var body: some View {
         GeometryReader { geo in
-            TimelineView(.animation(minimumInterval: nil, paused: reduceMotion)) { timeline in
+            TimelineView(.animation(minimumInterval: nil, paused: reduceMotion || !windowVisible)) { timeline in
                 let t = DemoMode.introTime ?? (reduceMotion
                     ? Self.duration + 1
                     : start.map { max(0, timeline.date.timeIntervalSince($0)) } ?? 0)
@@ -410,6 +411,7 @@ private enum IntroLight {
 /// Deep navy sky with a deterministic, gently twinkling starfield.
 /// Shared by the intro and onboarding so the hand-off between them is seamless.
 struct IntroNightSky: View {
+    @Environment(\.windowVisible) private var windowVisible
     var starOpacity: Double = 1
     var animated: Bool = true
 
@@ -448,7 +450,7 @@ struct IntroNightSky: View {
                 colors: [Theme.navyLight.opacity(0.45), .clear],
                 center: UnitPoint(x: 0.5, y: 1.1), startRadius: 0, endRadius: 420
             )
-            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !animated)) { timeline in
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !animated || !windowVisible)) { timeline in
                 let time = timeline.date.timeIntervalSinceReferenceDate
                 Canvas { ctx, size in
                     for star in Self.stars {

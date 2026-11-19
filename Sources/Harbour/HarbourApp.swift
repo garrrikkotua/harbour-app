@@ -52,6 +52,7 @@ struct HarbourApp: App {
                 }
             }
             .frame(width: 520)
+            .tracksWindowVisibility()
             .background(WindowChromeConfigurator())
         }
         // No title bar strip: the night intro, onboarding sky and active
@@ -65,7 +66,9 @@ struct HarbourApp: App {
         // Status item: a small lighthouse that lights up (with a countdown)
         // while a block is running.
         MenuBarExtra {
+            // The panel's view stays alive after it closes; pause its sky.
             MenuBarExtraView(manager: manager)
+                .tracksWindowVisibility()
         } label: {
             MenuBarLabel(manager: manager)
         }
