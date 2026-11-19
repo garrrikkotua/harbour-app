@@ -10,15 +10,26 @@ import Sparkle
 @MainActor
 final class AppUpdater: ObservableObject {
     @Published private(set) var canCheckForUpdates = false
+    /// Mirrors of Sparkle's own preferences. They're observed, not copied:
+    /// Sparkle's update alert has its own "Automatically download and install"
+    /// checkbox, and the menu must reflect a change made there.
     @Published var automaticallyChecks: Bool {
-        didSet { controller.updater.automaticallyChecksForUpdates = automaticallyChecks }
+        didSet {
+            if controller.updater.automaticallyChecksForUpdates != automaticallyChecks {
+                controller.updater.automaticallyChecksForUpdates = automaticallyChecks
+            }
+        }
     }
     @Published var automaticallyInstalls: Bool {
-        didSet { controller.updater.automaticallyDownloadsUpdates = automaticallyInstalls }
+        didSet {
+            if controller.updater.automaticallyDownloadsUpdates != automaticallyInstalls {
+                controller.updater.automaticallyDownloadsUpdates = automaticallyInstalls
+            }
+        }
     }
 
     private let controller: SPUStandardUpdaterController
-    private var observation: NSKeyValueObservation?
+    private var observations: [NSKeyValueObservation] = []
 
     init() {
         // Demo/QA launches never reach the network for updates.
@@ -27,12 +38,27 @@ final class AppUpdater: ObservableObject {
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
-        automaticallyChecks = controller.updater.automaticallyChecksForUpdates
-        automaticallyInstalls = controller.updater.automaticallyDownloadsUpdates
-        observation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
-            let value = updater.canCheckForUpdates
-            Task { @MainActor in self?.canCheckForUpdates = value }
-        }
+        let updater = controller.updater
+        automaticallyChecks = updater.automaticallyChecksForUpdates
+        automaticallyInstalls = updater.automaticallyDownloadsUpdates
+        observations = [
+            updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] u, _ in
+                let value = u.canCheckForUpdates
+                Task { @MainActor in self?.canCheckForUpdates = value }
+            },
+            updater.observe(\.automaticallyChecksForUpdates, options: [.new]) { [weak self] u, _ in
+                let value = u.automaticallyChecksForUpdates
+                Task { @MainActor in
+                    if self?.automaticallyChecks != value { self?.automaticallyChecks = value }
+                }
+            },
+            updater.observe(\.automaticallyDownloadsUpdates, options: [.new]) { [weak self] u, _ in
+                let value = u.automaticallyDownloadsUpdates
+                Task { @MainActor in
+                    if self?.automaticallyInstalls != value { self?.automaticallyInstalls = value }
+                }
+            },
+        ]
     }
 
     func checkForUpdates() {

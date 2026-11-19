@@ -41,7 +41,7 @@ Blocked apps are terminated approximately once a second. Save work before starti
 
 ## Privacy and storage
 
-Settings and runtime additions are stored in `~/Library/Application Support/Harbour/`. Active state is stored in `/var/db/harbour/state.json`, and attempt stats in `/var/db/harbour/stats.json` (kept across blocks, 400 days of history).
+Settings and runtime additions are stored in `~/Library/Application Support/Harbour/`. Active state is stored in `/var/db/harbour/state.json`, and attempt stats in `/var/db/harbour/stats.json` (kept across blocks: 400 days of detail plus a lifetime total, readable only by root and the account that started the block). The website sink only starts when both of its ports are free and the `127.72.66.1` alias isn't already in use; otherwise blocked names go to 0.0.0.0 and nothing is counted.
 
 During a website block, blocked names resolve to `127.72.66.1`, a loopback alias the daemon adds for the session. Its listener reads only the requested hostname (TLS SNI or HTTP `Host`), resets the connection and counts it; nothing is served, logged beyond the domain, or sent anywhere. Local servers on `127.0.0.1` are unaffected. If the alias or ports 80/443 are unavailable, Harbour falls back to the `0.0.0.0` null route without counting. The helper is installed to `/Library/PrivilegedHelperTools/com.harbour.daemon`, with a launchd job at `/Library/LaunchDaemons/com.harbour.daemon.plist`.
 

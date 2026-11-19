@@ -38,12 +38,29 @@ final class RelatedDomainsTests: XCTestCase {
 
     func test_companionsAreSafeAndNeverSharedCDNs() {
         let shared = ["fbcdn.net", "akamaihd.net", "cloudfront.net", "fastly.net", "googleusercontent.com"]
-        for (key, hosts) in RelatedDomains.companions {
-            for host in hosts {
+        for (key, companions) in RelatedDomains.companions {
+            for host in companions.sites + companions.assets {
                 XCTAssertTrue(DomainValidation.isSafeDomain(host), "\(key): \(host)")
                 XCTAssertFalse(shared.contains { host == $0 || host.hasSuffix("." + $0) }, "\(key): \(host)")
             }
         }
+    }
+
+    func test_multiLabelSuffixesGetMobileForms() {
+        let names = Set(RelatedDomains.hostnames(for: ["example.co.uk"]))
+        XCTAssertTrue(names.contains("m.example.co.uk"))
+        XCTAssertTrue(names.contains("mobile.example.co.uk"))
+        XCTAssertFalse(RelatedDomains.isRegistrable("co.uk"))
+        XCTAssertTrue(RelatedDomains.isRegistrable("bbc.com.au"))
+        XCTAssertFalse(RelatedDomains.isRegistrable("news.bbc.com"))
+        XCTAssertFalse(RelatedDomains.isRegistrable("news.bbc.co.uk"))
+    }
+
+    func test_siteHostnamesLeaveOutAssets() {
+        let sites = Set(RelatedDomains.siteHostnames(for: ["x.com"]))
+        XCTAssertTrue(sites.isSuperset(of: ["x.com", "www.x.com", "m.x.com", "mobile.x.com", "twitter.com", "www.twitter.com"]))
+        XCTAssertFalse(sites.contains("pbs.twimg.com"))
+        XCTAssertFalse(sites.contains("api.x.com"))
     }
 
     func test_hostnamesBlockWritesEachNameOnce() {

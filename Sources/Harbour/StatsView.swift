@@ -12,7 +12,7 @@ struct StatsView: View {
     enum Range: String, CaseIterable, Identifiable {
         case week = "7 days"
         case month = "30 days"
-        case all = "All time"
+        case year = "12 months"
         var id: String { rawValue }
     }
 
@@ -25,7 +25,7 @@ struct StatsView: View {
             header
             ScrollView {
                 VStack(spacing: 14) {
-                    if stats.allTime.total == 0 {
+                    if stats.lifetimeTotal == 0 {
                         emptyState
                     } else {
                         tiles
@@ -89,7 +89,8 @@ struct StatsView: View {
             }
             StatTile(value: stats.counts(lastDays: 1).total, label: "Today")
             StatTile(value: stats.counts(lastDays: 7).total, label: "7 days")
-            StatTile(value: stats.allTime.total, label: "All time")
+            // Lifetime total: unlike the per-day detail it is never pruned.
+            StatTile(value: stats.lifetimeTotal, label: "All time")
         }
     }
 
@@ -105,8 +106,10 @@ struct StatsView: View {
     private var chartData: [DayBar] {
         let keys = stats.dayKeys(lastDays: 14)
         let parser = DateFormatter()
-        parser.calendar = Calendar.current
+        // Day keys are Gregorian whatever calendar the user prefers.
+        parser.calendar = AttemptStats.storageCalendar
         parser.timeZone = .current
+        parser.locale = Locale(identifier: "en_US_POSIX")
         parser.dateFormat = "yyyy-MM-dd"
         return keys.flatMap { key -> [DayBar] in
             guard let day = parser.date(from: key) else { return [] }
@@ -172,7 +175,7 @@ struct StatsView: View {
         switch range {
         case .week: return stats.counts(lastDays: 7)
         case .month: return stats.counts(lastDays: 30)
-        case .all: return stats.allTime
+        case .year: return stats.counts(lastDays: 365)
         }
     }
 
@@ -226,7 +229,8 @@ struct StatsView: View {
                 Group {
                     switch target.kind {
                     case .site:
-                        FaviconView(domain: target.key, size: 16)
+                        // Cache only: history must not reach the favicon service.
+                        FaviconView(domain: target.key, size: 16, allowsNetwork: false)
                     case .app:
                         Image(nsImage: NSWorkspace.shared.icon(forFile: target.key))
                             .resizable()

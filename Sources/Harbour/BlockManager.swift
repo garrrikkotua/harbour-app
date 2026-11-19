@@ -179,9 +179,7 @@ final class BlockManager: ObservableObject {
         guard mtime != statsMtime else { return }
         statsMtime = mtime
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: statsFile)) else { return }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        if let stats = try? decoder.decode(AttemptStats.self, from: data), stats != attemptStats {
+        if let stats = try? AttemptStats.decoder.decode(AttemptStats.self, from: data), stats != attemptStats {
             attemptStats = stats
         }
     }

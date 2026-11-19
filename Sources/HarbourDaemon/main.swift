@@ -616,6 +616,19 @@ func enforcementTargets(for paths: [String]) -> [(target: String, bundle: String
     }.filter { seen.insert($0.target).inserted }
 }
 
+/// Blocked bundle paths that have a process running right now.
+func runningBundles(targets: [(target: String, bundle: String)]) -> [String] {
+    guard !targets.isEmpty else { return [] }
+    var running = Set<String>()
+    for (_, procPath) in listProcesses() {
+        for (target, bundle) in targets where Safety.matchesApp(executable: procPath, bundlePath: target) {
+            running.insert(bundle)
+            break
+        }
+    }
+    return Array(running)
+}
+
 /// Returns the blocked bundle paths that had a process terminated.
 @discardableResult
 func killBlockedApps(targets: [(target: String, bundle: String)]) -> Set<String> {
@@ -703,8 +716,9 @@ func stopAttemptTracking() {
     if let sink = attemptSink {
         sink.stop()
     } else {
-        // A crashed earlier run may have left the loopback alias behind.
-        AttemptSink.removeAlias()
+        // A crashed earlier run may have left its loopback alias behind; an
+        // alias Harbour didn't add is left alone.
+        AttemptSink.removeAliasIfOwned()
     }
     attemptSink = nil
     attemptRecorder?.flush(force: true)
@@ -757,12 +771,24 @@ for (i, path) in state.blockedPaths.enumerated() where Safety.isBlockableAppPath
 /// installed or moved mid-session).
 var killTargets = enforcementTargets(for: effectivePaths)
 
-// Attempt counting. Apps found running in the first seconds were open when
-// the block started (or restored at login after a reboot), not attempts.
-let recorder = AttemptRecorder(sessionStart: state.startTime)
+/// The account that started the block: the owner of its additions folder in
+/// that user's Library, else whoever is at the console.
+func blockOwnerUID(_ state: BlockState) -> uid_t? {
+    var info = stat()
+    if let path = state.additionsPath,
+       stat((path as NSString).deletingLastPathComponent, &info) == 0, info.st_uid != 0 {
+        return info.st_uid
+    }
+    if stat("/dev/console", &info) == 0, info.st_uid != 0 { return info.st_uid }
+    return nil
+}
+
+// Attempt counting. Apps already running when the block starts (or restored
+// at login after a reboot) are closed, but that first close isn't an attempt.
+let recorder = AttemptRecorder(sessionStart: state.startTime, readerUID: blockOwnerUID(state))
 attemptRecorder = recorder
 recorder.setBlockedDomains(effectiveDomains)
-recorder.suppressApps(effectivePaths)
+recorder.suppressApps(runningBundles(targets: killTargets))
 /// Starts the website sink once there is a website to block (an app-only
 /// block leaves networking alone until a site is added).
 var sinkAttempted = false
@@ -849,7 +875,7 @@ func reloadAdditionsIfChanged() -> Bool {
     }
     if effectivePaths.count != origPathCount {
         killTargets = enforcementTargets(for: effectivePaths)
-        recorder.suppressApps(Array(effectivePaths[origPathCount...]))
+        recorder.suppressApps(runningBundles(targets: enforcementTargets(for: Array(effectivePaths[origPathCount...]))))
     }
     if effectiveDomains.count != origDomainCount {
         recorder.setBlockedDomains(effectiveDomains)

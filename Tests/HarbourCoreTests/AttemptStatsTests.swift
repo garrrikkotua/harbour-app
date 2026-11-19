@@ -23,7 +23,7 @@ final class AttemptStatsTests: XCTestCase {
         XCTAssertEqual(stats.days["2026-11-19"]?.sites["x.com"], 2)
         XCTAssertEqual(stats.days["2026-11-19"]?.apps["/Applications/Slack.app"], 1)
         XCTAssertEqual(stats.session(startingAt: start).total, 3)
-        XCTAssertEqual(stats.allTime.total, 3)
+        XCTAssertEqual(stats.retained.total, 3)
     }
 
     func test_record_newSessionResetsSessionButKeepsHistory() {
@@ -35,7 +35,7 @@ final class AttemptStatsTests: XCTestCase {
 
         XCTAssertEqual(stats.session(startingAt: second).total, 1)
         XCTAssertEqual(stats.session(startingAt: first).total, 0)
-        XCTAssertEqual(stats.allTime.sites["x.com"], 2)
+        XCTAssertEqual(stats.retained.sites["x.com"], 2)
     }
 
     func test_dayKey_usesLocalCalendar() {
@@ -79,9 +79,65 @@ final class AttemptStatsTests: XCTestCase {
     func test_codableRoundTrip() throws {
         var stats = AttemptStats()
         stats.record(.app, key: "/Applications/Slack.app", at: Date(), sessionStart: Date(timeIntervalSince1970: 1000))
-        let e = JSONEncoder(); e.dateEncodingStrategy = .iso8601
-        let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601
-        XCTAssertEqual(try d.decode(AttemptStats.self, from: e.encode(stats)), stats)
+        XCTAssertEqual(try AttemptStats.decoder.decode(AttemptStats.self, from: AttemptStats.encoder.encode(stats)), stats)
+    }
+
+    func test_fractionalSessionStartSurvivesRoundTrip() throws {
+        // BlockManager.startBlock() stores Date() with fractional seconds.
+        let start = Date(timeIntervalSinceReferenceDate: 816795211.223995)
+        var stats = AttemptStats()
+        stats.record(.site, key: "x.com", at: start.addingTimeInterval(60), sessionStart: start)
+        let decoded = try AttemptStats.decoder.decode(AttemptStats.self, from: AttemptStats.encoder.encode(stats))
+        XCTAssertEqual(decoded.session(startingAt: start).total, 1)
+        // A restarted daemon keeps the same block's counts.
+        var resumed = decoded
+        resumed.beginSession(start)
+        XCTAssertEqual(resumed.session(startingAt: start).total, 1)
+    }
+
+    func test_decodesLegacyISO8601Files() throws {
+        let json = #"{"days":{"2026-11-19":{"apps":{},"sites":{"x.com":3}}},"session":{"apps":{},"sites":{"x.com":3}},"sessionStart":"2026-11-19T08:00:00Z","version":1}"#
+        let stats = try AttemptStats.decoder.decode(AttemptStats.self, from: Data(json.utf8))
+        XCTAssertEqual(stats.session(startingAt: date("2026-11-19T08:00:00Z")).total, 3)
+        XCTAssertEqual(stats.lifetimeTotal, 3)
+    }
+
+    func test_lifetimeTotalOutlivesPruning() {
+        var stats = AttemptStats()
+        let old = date("2024-01-01T09:00:00Z")
+        stats.record(.site, key: "x.com", at: old, sessionStart: old, calendar: calendar)
+        stats.record(.site, key: "x.com", at: date("2026-11-19T09:00:00Z"), sessionStart: old, calendar: calendar)
+        stats.prune(now: date("2026-11-19T10:00:00Z"), calendar: calendar)
+        XCTAssertEqual(stats.retained.total, 1)
+        XCTAssertEqual(stats.lifetimeTotal, 2)
+    }
+
+    func test_compactKeepsFileUnderLimitDroppingOldestDays() throws {
+        var stats = AttemptStats()
+        for day in 0..<200 {
+            let when = date("2026-01-01T09:00:00Z").addingTimeInterval(Double(day) * 86_400)
+            for i in 0..<20 {
+                stats.record(.site, key: "site-\(i)-with-a-long-name.example.com", at: when,
+                             sessionStart: when, calendar: calendar)
+            }
+        }
+        let newest = stats.days.keys.max()!
+        stats.compact(toFit: 64 * 1024)
+        XCTAssertLessThanOrEqual(try AttemptStats.encoder.encode(stats).count, 64 * 1024)
+        XCTAssertNotNil(stats.days[newest])
+        XCTAssertLessThan(stats.days.count, 200)
+        XCTAssertEqual(stats.lifetimeTotal, 4000)
+    }
+
+    func test_storageCalendarIsGregorian() {
+        XCTAssertEqual(AttemptStats.storageCalendar.identifier, .gregorian)
+        var buddhist = Calendar(identifier: .buddhist)
+        buddhist.timeZone = .current
+        let now = Date()
+        // Default keys never follow the user's calendar setting.
+        XCTAssertEqual(AttemptStats.dayKey(for: now), AttemptStats.dayKey(for: now, calendar: AttemptStats.storageCalendar))
+        XCTAssertNotEqual(AttemptStats.dayKey(for: now, calendar: buddhist).prefix(4),
+                          AttemptStats.dayKey(for: now).prefix(4))
     }
 
     // MARK: Debouncer
@@ -117,9 +173,28 @@ final class AttemptStatsTests: XCTestCase {
         XCTAssertEqual(BlockedHostMatcher.match(host: "www.youtube.com", blocked: blocked), "youtube.com")
         XCTAssertEqual(BlockedHostMatcher.match(host: "YOUTUBE.com.", blocked: blocked), "youtube.com")
         XCTAssertEqual(BlockedHostMatcher.match(host: "reddit.com", blocked: blocked), "www.reddit.com")
-        XCTAssertNil(BlockedHostMatcher.match(host: "m.youtube.com", blocked: blocked))
         XCTAssertNil(BlockedHostMatcher.match(host: "notyoutube.com", blocked: blocked))
         XCTAssertNil(BlockedHostMatcher.match(host: "dns.google", blocked: blocked))
+    }
+
+    func test_matcher_countsMobileAndSiblingSitesButNotAssets() {
+        let blocked = ["x.com", "youtube.com", "reddit.com"]
+        XCTAssertEqual(BlockedHostMatcher.match(host: "m.youtube.com", blocked: blocked), "youtube.com")
+        XCTAssertEqual(BlockedHostMatcher.match(host: "youtu.be", blocked: blocked), "youtube.com")
+        XCTAssertEqual(BlockedHostMatcher.match(host: "old.reddit.com", blocked: blocked), "reddit.com")
+        XCTAssertEqual(BlockedHostMatcher.match(host: "mobile.x.com", blocked: blocked), "x.com")
+        XCTAssertEqual(BlockedHostMatcher.match(host: "www.twitter.com", blocked: blocked), "x.com")
+        // A cached page fetching data or images is not an attempt.
+        XCTAssertNil(BlockedHostMatcher.match(host: "pbs.twimg.com", blocked: blocked))
+        XCTAssertNil(BlockedHostMatcher.match(host: "api.x.com", blocked: blocked))
+        XCTAssertNil(BlockedHostMatcher.match(host: "i.ytimg.com", blocked: blocked))
+    }
+
+    func test_matcher_prefersEntryThatListsTheHostDirectly() {
+        // twitter.com is a sibling of x.com, but an explicit entry wins.
+        XCTAssertEqual(BlockedHostMatcher.match(host: "twitter.com", blocked: ["x.com", "twitter.com"]), "twitter.com")
+        XCTAssertEqual(BlockedHostMatcher.match(host: "twitter.com", blocked: ["twitter.com", "x.com"]), "twitter.com")
+        XCTAssertEqual(BlockedHostMatcher.match(host: "x.com", blocked: ["twitter.com", "x.com"]), "x.com")
     }
 }
 

@@ -59,21 +59,34 @@ def alias_present():
 
 
 def session_counts(start):
-    """(sites, apps) counted for the session that started at `start`."""
+    """(sites, apps) counted for the session that started at `start`.
+
+    The daemon stores sessionStart as Swift Date seconds, the same value as
+    state.json's startTime, fractional part included.
+    """
     try:
         stats = json.loads(STATS.read_text())
     except (OSError, ValueError):
         return {}, {}
-    if stats.get('sessionStart') != start:
+    recorded = stats.get('sessionStart')
+    if not isinstance(recorded, (int, float)) or abs(recorded - start) > 0.001:
         return {}, {}
     session = stats.get('session', {})
     return session.get('sites', {}), session.get('apps', {})
 
 
-def iso(reference_seconds):
-    """Swift Date (2001 epoch) seconds as the ISO 8601 string the daemon writes."""
-    unix = reference_seconds + 978307200
-    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(unix))
+def test_user():
+    """The account that ran sudo. The daemon never kills root processes, so the
+    disposable app has to run as an ordinary user to be blocked at all."""
+    uid, gid = int(os.environ.get('SUDO_UID', 0)), int(os.environ.get('SUDO_GID', 0))
+    if uid == 0:
+        raise SystemExit('Run with sudo from an ordinary account (SUDO_UID is needed).')
+    return uid, gid
+
+
+def launch(executable):
+    uid, gid = test_user()
+    return subprocess.Popen([str(executable), '60'], user=uid, group=gid, extra_groups=[])
 
 
 def tls_attempt(host):
@@ -102,8 +115,13 @@ def session(folder, websites):
     executable = bundle / 'Contents/MacOS/sleep'
     executable.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2('/bin/sleep', executable)
-    # Whole seconds so the ISO 8601 session key written by the daemon matches.
-    now = float(int(time.time() - 978307200))  # Swift Date's 2001 reference epoch.
+    # The test user must be able to reach and run the fixture.
+    os.chmod(folder, 0o755)
+    for path in [bundle, bundle / 'Contents', executable.parent]:
+        os.chmod(path, 0o755)
+    os.chmod(executable, 0o755)
+    # Fractional like the app's Date(); the daemon must keep it exactly.
+    now = time.time() - 978307200  # Swift Date's 2001 reference epoch.
     duration = 60 if websites else 25
     state = dict(startTime=now, endTime=now + duration,
                  domains=['example.com'] if websites else [],
@@ -120,19 +138,19 @@ def session(folder, websites):
     started = False
     child = None
     try:
+        # Already open when the block starts: closed, but not an attempt.
+        child = launch(executable)
         run('/bin/launchctl', 'bootstrap', 'system', str(PLIST))
         started = True
-        child = subprocess.Popen([str(executable), '60'])
         wait_for(lambda: child.poll() is not None, 8, 'Disposable app was not terminated')
         assert child.returncode == -9, f'Unexpected app exit: {child.returncode}'
         print('PASS: disposable app was blocked', flush=True)
 
-        # The first kill happens while the app was "already open" at block
-        # start, so it must not count. A relaunch after that window does.
-        start_key = iso(now)
+        # A relaunch after the suppression window is one attempt.
+        start_key = now
         time.sleep(6.5)
         assert not session_counts(start_key)[1], 'App open at block start was counted'
-        child = subprocess.Popen([str(executable), '60'])
+        child = launch(executable)
         wait_for(lambda: child.poll() is not None, 8, 'Relaunched app was not terminated')
         wait_for(lambda: session_counts(start_key)[1].get(str(bundle)) == 1, 12,
                  'Relaunched app was not counted as one attempt')
@@ -168,6 +186,8 @@ def session(folder, websites):
         assert not ANCHOR.exists() and not TOKEN.exists()
         assert not alias_present(), f'Loopback alias {SINK} left behind'
         assert STATS.exists(), 'Attempt stats must outlive the block'
+        assert STATS.stat().st_mode & 0o777 == 0o600, 'Attempt history must not be world-readable'
+        assert not Path('/var/db/harbour/sink-alias').exists(), 'Sink alias ownership marker left behind'
         # Compare nonempty lines because the existing marker stripper normalizes
         # whitespace around its own appended section.
         lines = lambda text: [line for line in text.splitlines() if line.strip()]
@@ -206,8 +226,17 @@ def main():
         parser.error('Existing Harbour network markers found; resolve them first.')
     if alias_present():
         parser.error(f'Loopback alias {SINK} already exists; remove it first.')
-    # Keep the user's real attempt history out of the test and restore it after.
-    saved_stats = STATS.read_bytes() if STATS.exists() else None
+    if Path('/var/db/harbour/sink-alias').exists():
+        parser.error('Stale /var/db/harbour/sink-alias marker found; remove it first.')
+    test_user()
+    # Keep the user's real attempt history out of the test and restore it
+    # after. Moving the file keeps its owner, mode and read ACL intact.
+    saved_stats = STATS.with_name('stats.json.smoke-backup')
+    if saved_stats.exists():
+        parser.error(f'{saved_stats} exists from an interrupted run; restore it to {STATS} first.')
+    had_stats = STATS.exists()
+    if had_stats:
+        os.rename(STATS, saved_stats)
     try:
         with tempfile.TemporaryDirectory(prefix='harbour-smoke-', dir='/private/tmp') as temporary:
             folder = Path(temporary)
@@ -215,11 +244,10 @@ def main():
             if args.include_websites:
                 session(folder, websites=True)
     finally:
-        if saved_stats is None:
-            STATS.unlink(missing_ok=True)
+        if had_stats:
+            os.replace(saved_stats, STATS)
         else:
-            STATS.write_bytes(saved_stats)
-            os.chmod(STATS, 0o644)
+            STATS.unlink(missing_ok=True)
     print('Smoke tests passed. Reboot, VPN, Intel, and GUI authorization still need separate checks.')
 
 
