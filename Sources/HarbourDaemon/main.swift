@@ -418,6 +418,14 @@ func applyPF(domains: [String]) {
     let candidates = domains.filter { DomainValidation.isSafeDomain($0) }
     guard !candidates.isEmpty else { return }
 
+    // The sink guard needs no DNS: load it at once so short blocks count
+    // attempts too, instead of waiting ~100 s for the full resolution.
+    pfLock.lock()
+    if sinkGuardWanted && !pfLoaded && !pfShuttingDown {
+        loadPFRules(newIPs: [])
+    }
+    pfLock.unlock()
+
     // Do DNS resolution OUTSIDE the lock — it's slow (~100s) and we don't need
     // to block the kill loop's cleanup path while we wait on the network.
     var freshIPs = Set<String>()
@@ -463,6 +471,12 @@ func applyPF(domains: [String]) {
     accumulatedIPs.formUnion(freshIPs)
     let added = accumulatedIPs.count - before
     log("pf: \(freshIPs.count) fresh, \(added) new, \(accumulatedIPs.count) total")
+    loadPFRules(newIPs: newIPs)
+}
+
+/// Writes the anchor from `accumulatedIPs` (plus the sink guard when wanted)
+/// and loads it, enabling PF on the first load. Call with pfLock held.
+func loadPFRules(newIPs: Set<String>) {
 
     writeAnchorFile(ips: accumulatedIPs, guardSink: sinkGuardWanted)
     ensurePFConfHasAnchor()
@@ -736,9 +750,13 @@ func fullCleanup() {
     log("cleanup: removing hosts + pf rules + state")
     removeHosts()
     // Alias first: while a browser still holds the sink address, the PF
-    // guard must stay in place.
-    stopAttemptTracking()
-    removePF()
+    // guard must stay in place. If the alias can't be removed, only the
+    // guard survives (site rules go); the next run removes both.
+    if stopAttemptTracking() {
+        removePF()
+    } else {
+        keepOnlySinkGuard()
+    }
     try? FileManager.default.removeItem(atPath: stateFile)
     try? FileManager.default.removeItem(atPath: plistPath)
     // The GUI owns its additions file and removes it after observing expiry.
@@ -767,25 +785,50 @@ func liftNetworkRulesKeepingState() {
     log("termination: removing hosts + pf rules, keeping state so the block resumes at next launch")
     removeHosts()
     // Alias first: while a browser still holds the sink address, the PF
-    // guard must stay in place.
-    stopAttemptTracking()
-    removePF()
+    // guard must stay in place. If the alias can't be removed, only the
+    // guard survives (site rules go); the next run removes both.
+    if stopAttemptTracking() {
+        removePF()
+    } else {
+        keepOnlySinkGuard()
+    }
 }
 
 /// Set once the block is running; nil during startup cleanup.
 var attemptRecorder: AttemptRecorder?
 var attemptSink: AttemptSink?
 
-func stopAttemptTracking() {
+/// Stops the sink and saves pending counts. False when Harbour's alias is
+/// still on lo0 afterwards.
+@discardableResult
+func stopAttemptTracking() -> Bool {
+    let removed: Bool
     if let sink = attemptSink {
-        sink.stop()
+        removed = sink.stop()
     } else {
         // A crashed earlier run may have left its loopback alias behind; an
         // alias Harbour didn't add is left alone.
-        AttemptSink.removeAliasIfOwned()
+        removed = AttemptSink.removeAliasIfOwned()
     }
     attemptSink = nil
     attemptRecorder?.flush(force: true)
+    return removed
+}
+
+/// Cleanup when the alias couldn't be removed: drop every website rule but
+/// keep PF rejecting other ports on the alias, so cached sink addresses can't
+/// reach local services. The ownership marker stays, so the next Harbour run
+/// (any later block, or a restart) removes the alias and then this guard.
+func keepOnlySinkGuard() {
+    log("cleanup: \(AttemptSink.address) still present; keeping only its PF guard")
+    pfLock.lock(); defer { pfLock.unlock() }
+    pfShuttingDown = true
+    var contents = "# Harbour: guard for a loopback alias that could not be removed\n"
+    contents += sinkGuardRules()
+    try? contents.write(toFile: pfAnchorFile, atomically: true, encoding: .utf8)
+    run("/sbin/pfctl", ["-a", pfAnchorName, "-f", pfAnchorFile], timeoutSec: 5)
+    accumulatedIPs.removeAll()
+    setSinkGuard(false)
 }
 
 // MARK: - Signal handling
@@ -845,7 +888,8 @@ var killTargets = enforcementTargets(for: effectivePaths)
 // Attempt counting. Apps already running when the block starts (or restored
 // at login after a reboot) are closed, but that first close isn't an attempt.
 // The owner is recorded by the app in root-owned state; it is never guessed.
-let recorder = AttemptRecorder(sessionStart: state.startTime, ownerUID: state.ownerUID.map { uid_t($0) })
+let recorder = AttemptRecorder(sessionStart: state.startTime, ownerUID: state.ownerUID.map { uid_t($0) },
+                               ownerUUID: state.ownerUUID)
 attemptRecorder = recorder
 recorder.setBlockedDomains(effectiveDomains)
 recorder.excludePreexisting(runningPIDs(targets: killTargets, uid: recorder.ownerUIDValue))
@@ -855,9 +899,11 @@ var sinkAttempted = false
 func startSinkIfNeeded() {
     guard !sinkAttempted, !effectiveDomains.isEmpty else { return }
     sinkAttempted = true
-    let sink = AttemptSink(onHost: { host, port in
-        recorder.recordHost(host, connectionOwner: { AttemptSink.connectionOwnerUID(clientPort: port) })
+    var sinkRef: AttemptSink?
+    let sink = AttemptSink(onHost: { host, connection in
+        recorder.recordHost(host, connectionOwner: { sinkRef?.connectionOwnerUID(connection) })
     })
+    sinkRef = sink
     // A main ruleset that skips loopback would ignore the guard rules.
     let conf = (try? String(contentsOfFile: pfMainConf, encoding: .utf8)) ?? ""
     let skipsLoopback = conf.split(separator: "\n").contains { line in
@@ -961,7 +1007,7 @@ func reloadAdditionsIfChanged() -> Bool {
         let persisted = BlockState(startTime: state.startTime, endTime: state.endTime,
             domains: effectiveDomains, blockedPaths: effectivePaths,
             blockedBundleIDs: effectiveBundleIDs, additionsPath: state.additionsPath,
-            ownerUID: state.ownerUID)
+            ownerUID: state.ownerUID, ownerUUID: state.ownerUUID)
         if let data = try? JSONEncoder().encode(persisted) {
             do { try data.write(to: URL(fileURLWithPath: stateFile), options: .atomic) }
             catch { log("could not persist additions: \(error)") }

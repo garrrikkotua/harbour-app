@@ -48,6 +48,9 @@ public struct BlockState: Codable {
     /// kept in its own file, readable only by that account. Optional for
     /// states written by older builds.
     public var ownerUID: UInt32?
+    /// That account's UUID when the block started; a resumed daemon checks
+    /// the UID still maps to it before attributing anything.
+    public var ownerUUID: String?
 
     public init(
         startTime: Date,
@@ -56,7 +59,8 @@ public struct BlockState: Codable {
         blockedPaths: [String],
         blockedBundleIDs: [String],
         additionsPath: String? = nil,
-        ownerUID: UInt32? = nil
+        ownerUID: UInt32? = nil,
+        ownerUUID: String? = nil
     ) {
         self.startTime = startTime
         self.endTime = endTime
@@ -65,6 +69,7 @@ public struct BlockState: Codable {
         self.blockedBundleIDs = blockedBundleIDs
         self.additionsPath = additionsPath
         self.ownerUID = ownerUID
+        self.ownerUUID = ownerUUID
     }
 }
 

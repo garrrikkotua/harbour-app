@@ -260,7 +260,8 @@ final class BlockManager: ObservableObject {
             blockedPaths: config.apps.map(\.path),
             blockedBundleIDs: config.apps.map(\.bundleID),
             additionsPath: additionsURL.path,
-            ownerUID: getuid()
+            ownerUID: getuid(),
+            ownerUUID: AttemptStats.accountUUID(getuid())
         )
         if demo != nil {
             // Demo: pretend the helper installed; nothing leaves this process.

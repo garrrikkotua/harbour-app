@@ -40,10 +40,20 @@ final class AttemptRecorder {
     /// access to the history.
     private let ownerUUID: String?
 
-    init(sessionStart: Date, ownerUID: uid_t?) {
+    /// `ownerUUID` is the account UUID the app recorded when the block
+    /// started. If the UID now maps to a different account (deleted and
+    /// reassigned before a resume), nothing is attributed or saved.
+    init(sessionStart: Date, ownerUID: uid_t?, ownerUUID recorded: String?) {
         self.sessionStart = sessionStart
-        self.ownerUID = ownerUID
-        ownerUUID = ownerUID.flatMap { $0 == 0 ? nil : AttemptStats.accountUUID($0) }
+        let current = ownerUID.flatMap { $0 == 0 ? nil : AttemptStats.accountUUID($0) }
+        if let recorded, current?.uppercased() != recorded.uppercased() {
+            log("stats: the block owner's account changed since the block started; attempts are not saved")
+            self.ownerUID = nil
+            ownerUUID = nil
+        } else {
+            self.ownerUID = ownerUID
+            ownerUUID = current
+        }
         path = ownerUUID.map(AttemptStats.filePath(forAccountUUID:))
         if path == nil { log("stats: block owner unknown; attempts are not saved") }
         // Pre-release builds kept one shared, world-readable file.
@@ -115,9 +125,9 @@ final class AttemptRecorder {
     func recordApp(_ path: String, pid: pid_t) {
         lock.lock()
         let now = Date()
+        // Only that process is excluded (its helpers were running too, so
+        // they're in the set); an immediate relaunch is a new PID and counts.
         if preexistingPIDs.remove(pid) != nil {
-            // Its helpers die in the same sweep; don't count them either.
-            appBursts.suppress(path, at: now)
             lock.unlock()
             return
         }
@@ -127,7 +137,30 @@ final class AttemptRecorder {
         lock.unlock()
     }
 
+    /// Writes happen on this queue, never on the enforcement loop: encoding,
+    /// fsync and the ACL subprocess can be slow.
+    private let writer = DispatchQueue(label: "com.harbour.stats-writer")
+    private var writeScheduled = false
+
+    /// Periodic flushes are queued (and coalesced); `force` writes now and
+    /// waits, for shutdown.
     func flush(force: Bool = false) {
+        if force {
+            writer.sync { writeNow(force: true) }
+            return
+        }
+        lock.lock()
+        let due = dirty && !writeScheduled && Date().timeIntervalSince(lastFlush) >= 5
+        if due { writeScheduled = true }
+        lock.unlock()
+        guard due else { return }
+        writer.async { [self] in
+            writeNow(force: false)
+            lock.lock(); writeScheduled = false; lock.unlock()
+        }
+    }
+
+    private func writeNow(force: Bool) {
         guard let path else { return }
         lock.lock()
         let now = Date()
@@ -216,18 +249,33 @@ final class AttemptSink {
     static let ownerMarker = "/var/db/harbour/sink-alias"
 
     private var listeners: [Int32] = []
-    /// Called with the requested hostname and the client's TCP port while the
-    /// connection is still open, so its owning process can be looked up.
-    private let onHost: (String, UInt16) -> Void
+    /// Listener descriptor → its port.
+    private var listenerPorts: [Int32: UInt16] = [:]
+    /// One accepted connection: the endpoints that identify it while it is
+    /// open, and when it was accepted.
+    struct Connection {
+        let clientAddress: String
+        let clientPort: UInt16
+        let serverPort: UInt16
+        let acceptedAt: Date
+        /// lsof's spelling of the client end: "<ip>:<port>-><sink>:<port>".
+        var lsofName: String { "\(clientAddress):\(clientPort)->\(AttemptSink.address):\(serverPort)" }
+    }
+
+    /// Called with the requested hostname while the connection is still
+    /// open, so its owning process can be looked up.
+    private let onHost: (String, Connection) -> Void
     private let stateLock = NSLock()
     private var stopped = false
     private var thread: Thread?
     private let acceptDone = DispatchSemaphore(value: 0)
     private let connections = DispatchQueue(label: "com.harbour.sink", attributes: .concurrent)
+    /// In-flight connection handlers, drained (with a time limit) by stop().
+    private let inFlight = DispatchGroup()
     /// Caps concurrent connections; extras are reset immediately.
     private let slots = DispatchSemaphore(value: 16)
 
-    init(onHost: @escaping (String, UInt16) -> Void) {
+    init(onHost: @escaping (String, Connection) -> Void) {
         self.onHost = onHost
     }
 
@@ -265,6 +313,7 @@ final class AttemptSink {
                 return false
             }
             listeners.append(fd)
+            listenerPorts[fd] = port
         }
         let t = Thread { [weak self] in
             self?.acceptLoop()
@@ -280,23 +329,32 @@ final class AttemptSink {
     /// Stops accepting, waits for the accept thread and in-flight connections
     /// to finish (so their attempts reach the final flush), then closes the
     /// listeners and removes the alias.
-    func stop() {
+    /// Returns false when Harbour's alias is still present afterwards.
+    @discardableResult
+    func stop() -> Bool {
         stateLock.lock()
         let wasRunning = !stopped && thread != nil
         stopped = true
         stateLock.unlock()
-        guard wasRunning else { return }
+        guard wasRunning else { return Self.removeAliasIfOwned() }
         // The accept loop polls with a 500 ms timeout and checks `stopped`;
         // descriptors are closed only after it exits, so none is reused under it.
-        _ = acceptDone.wait(timeout: .now() + 3)
-        connections.sync(flags: .barrier) {}
+        _ = acceptDone.wait(timeout: .now() + 2)
+        // Handlers stop attributing once `stopped` is set (no new lsof
+        // scans), so this is short; the limit keeps cleanup inside launchd's
+        // termination grace period even if one is stuck.
+        if inFlight.wait(timeout: .now() + 2) == .timedOut {
+            log("sink: connections still in flight at shutdown; their attempts are dropped")
+        }
         stateLock.lock()
         let fds = listeners
         listeners = []
         stateLock.unlock()
         for fd in fds { close(fd) }
-        Self.removeAliasIfOwned()
+        return Self.removeAliasIfOwned()
     }
+
+    var isStopping: Bool { isStopped }
 
     /// Whether lo0 carries the alias; nil when ifconfig couldn't tell.
     static func aliasState() -> Bool? {
@@ -307,34 +365,37 @@ final class AttemptSink {
 
     static func aliasPresent() -> Bool { aliasState() ?? true }
 
-    /// Client port → owning UID for connections to the sink, from one lsof
-    /// scan. Connections of one page load share a snapshot: callers wait for
-    /// a scan in progress instead of each starting their own.
+    /// Client end (lsof name) → owning UID for connections to the sink, from
+    /// one lsof scan. Connections of one page load share a snapshot: callers
+    /// wait for a scan in progress instead of each starting their own.
     private static let ownersLock = NSLock()
-    private static var owners: [UInt16: uid_t] = [:]
+    private static var owners: [String: uid_t] = [:]
     private static var ownersTakenAt = Date.distantPast
 
-    /// The account owning the client end of a loopback connection to the
-    /// sink from local port `clientPort` (root sees every process). nil when
-    /// it can't be determined.
-    static func connectionOwnerUID(clientPort: UInt16) -> uid_t? {
-        ownersLock.lock(); defer { ownersLock.unlock() }
-        // A connection accepted after the last scan isn't in it: rescan.
-        if owners[clientPort] == nil || Date().timeIntervalSince(ownersTakenAt) > 2 {
-            owners = scanOwners()
-            ownersTakenAt = Date()
+    /// The account owning the client end of `connection`, or nil when it
+    /// can't be determined. Only a snapshot taken after the connection was
+    /// accepted is used: while the connection is open (it is reset only after
+    /// this returns) its endpoints can't belong to another socket, so the
+    /// entry is this connection's.
+    func connectionOwnerUID(_ connection: Connection) -> uid_t? {
+        guard !isStopped else { return nil }
+        Self.ownersLock.lock(); defer { Self.ownersLock.unlock() }
+        if Self.ownersTakenAt <= connection.acceptedAt {
+            guard !isStopped else { return nil }
+            Self.ownersTakenAt = Date()
+            Self.owners = Self.scanOwners()
         }
         // Root clients are known but never the owner.
-        return owners[clientPort].flatMap { $0 == 0 ? nil : $0 }
+        return Self.owners[connection.lsofName].flatMap { $0 == 0 ? nil : $0 }
     }
 
-    private static func scanOwners() -> [UInt16: uid_t] {
+    private static func scanOwners() -> [String: uid_t] {
         let (rc, out) = run("/usr/sbin/lsof", ["-nP", "-iTCP@\(address)", "-sTCP:ESTABLISHED", "-F", "pun"],
                             timeoutSec: 2)
         guard rc == 0 else { return [:] }
         // -F output: p<pid>, u<uid>, then one n<local>-><remote> per socket.
         var uid: uid_t?
-        var found: [UInt16: Set<uid_t>] = [:]
+        var found: [String: Set<uid_t>] = [:]
         let suffixes = ports.map { "->\(address):\($0)" }
         for line in out.split(separator: "\n") {
             switch line.first {
@@ -343,15 +404,11 @@ final class AttemptSink {
             case "n":
                 let name = String(line.dropFirst())
                 // Client ends only: "<src>:<port>->127.72.66.1:443".
-                guard let u = uid, suffixes.contains(where: name.hasSuffix),
-                      let arrow = name.range(of: "->"),
-                      let colon = name[..<arrow.lowerBound].lastIndex(of: ":"),
-                      let port = UInt16(name[name.index(after: colon)..<arrow.lowerBound]) else { continue }
-                found[port, default: []].insert(u)
+                if let u = uid, suffixes.contains(where: name.hasSuffix) { found[name, default: []].insert(u) }
             default: break
             }
         }
-        // Exactly one owner per port; ambiguous ports stay unattributed.
+        // Exactly one owner per connection; ambiguous ones stay unattributed.
         return found.compactMapValues { $0.count == 1 ? $0.first : nil }
     }
 
@@ -401,16 +458,22 @@ final class AttemptSink {
     /// Removes the alias only if Harbour added it, including one a crashed
     /// earlier run left behind. The ownership marker goes only once the alias
     /// is confirmed gone, so a failed removal is retried by the next cleanup.
-    static func removeAliasIfOwned() {
-        guard FileManager.default.fileExists(atPath: ownerMarker) else { return }
-        if aliasState() != false {
-            run("/sbin/ifconfig", ["lo0", "-alias", address], timeoutSec: 3)
+    /// True when no Harbour-owned alias remains.
+    @discardableResult
+    static func removeAliasIfOwned() -> Bool {
+        guard FileManager.default.fileExists(atPath: ownerMarker) else { return true }
+        for attempt in 0..<3 {
+            if attempt > 0 { Thread.sleep(forTimeInterval: 0.3) }
+            if aliasState() != false {
+                run("/sbin/ifconfig", ["lo0", "-alias", address], timeoutSec: 3)
+            }
+            if aliasState() == false {
+                try? FileManager.default.removeItem(atPath: ownerMarker)
+                return true
+            }
         }
-        guard aliasState() == false else {
-            log("sink: could not confirm \(address) was removed; will retry at next cleanup")
-            return
-        }
-        try? FileManager.default.removeItem(atPath: ownerMarker)
+        log("sink: could not confirm \(address) was removed; will retry at next cleanup")
+        return false
     }
 
     private var isStopped: Bool {
@@ -444,6 +507,7 @@ final class AttemptSink {
     private func acceptLoop() {
         while !isStopped {
             stateLock.lock()
+            let ports = listenerPorts
             var pfds = listeners.map { pollfd(fd: $0, events: Int16(POLLIN), revents: 0) }
             stateLock.unlock()
             guard !pfds.isEmpty else { return }
@@ -456,12 +520,17 @@ final class AttemptSink {
                     $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { accept(p.fd, $0, &length) }
                 }
                 guard client >= 0 else { continue }
-                handle(client, peerPort: UInt16(bigEndian: peer.sin_port))
+                var ip = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                inet_ntop(AF_INET, &peer.sin_addr, &ip, socklen_t(INET_ADDRSTRLEN))
+                handle(client, Connection(clientAddress: String(cString: ip),
+                                          clientPort: UInt16(bigEndian: peer.sin_port),
+                                          serverPort: ports[p.fd] ?? 0,
+                                          acceptedAt: Date()))
             }
         }
     }
 
-    private func handle(_ fd: Int32, peerPort: UInt16) {
+    private func handle(_ fd: Int32, _ connection: Connection) {
         var yes: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, socklen_t(MemoryLayout<Int32>.size))
         // accept() inherits O_NONBLOCK; reads below rely on a receive timeout.
@@ -470,9 +539,10 @@ final class AttemptSink {
             Self.reset(fd)
             return
         }
+        inFlight.enter()
         connections.async { [self] in
-            defer { slots.signal() }
-            if let host = Self.readHost(fd) { onHost(host, peerPort) }
+            defer { slots.signal(); inFlight.leave() }
+            if let host = Self.readHost(fd), !isStopped { onHost(host, connection) }
             Self.reset(fd)
         }
     }
