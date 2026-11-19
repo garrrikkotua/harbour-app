@@ -190,6 +190,17 @@ final class AttemptStatsTests: XCTestCase {
         XCTAssertNil(BlockedHostMatcher.match(host: "i.ytimg.com", blocked: blocked))
     }
 
+    func test_matcher_ignoresAssetHostsListedByPresets() {
+        let blocked = DomainPreset.videoStreaming.domains
+        XCTAssertEqual(BlockedHostMatcher.match(host: "www.youtube.com", blocked: blocked), "youtube.com")
+        for asset in ["i.ytimg.com", "s.ytimg.com", "youtubei.googleapis.com", "yt3.ggpht.com",
+                      "googlevideo.com", "nflxvideo.net", "ytimg.com"] {
+            XCTAssertNil(BlockedHostMatcher.match(host: asset, blocked: blocked), asset)
+        }
+        // Still enforced.
+        XCTAssertTrue(RelatedDomains.hostnames(for: blocked).contains("i.ytimg.com"))
+    }
+
     func test_matcher_prefersEntryThatListsTheHostDirectly() {
         // twitter.com is a sibling of x.com, but an explicit entry wins.
         XCTAssertEqual(BlockedHostMatcher.match(host: "twitter.com", blocked: ["x.com", "twitter.com"]), "twitter.com")

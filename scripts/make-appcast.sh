@@ -20,14 +20,26 @@ SIGN_UPDATE="$(find .build/artifacts -path '*Sparkle*/bin/sign_update' -type f |
 BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")"
 SHORT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 MIN_OS="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist")"
+PUBLIC_KEY="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$APP/Contents/Info.plist")"
 [[ "$SHORT" == "$VERSION" ]] || { echo "App is $SHORT, expected $VERSION" >&2; exit 1; }
 
-if [[ -n "${SPARKLE_PRIVATE_KEY:-}" ]]; then
-  ATTRS="$(printf '%s' "$SPARKLE_PRIVATE_KEY" | "$SIGN_UPDATE" --ed-key-file - "$ZIP")"
-else
-  ATTRS="$("$SIGN_UPDATE" "$ZIP")"
-fi
+# sign_update with the CI secret, or the login keychain when it is unset.
+sign() {
+  if [[ -n "${SPARKLE_PRIVATE_KEY:-}" ]]; then
+    printf '%s' "$SPARKLE_PRIVATE_KEY" | "$SIGN_UPDATE" --ed-key-file - "$@"
+  else
+    "$SIGN_UPDATE" "$@"
+  fi
+}
+
+ATTRS="$(sign "$ZIP")"
 [[ "$ATTRS" == *'sparkle:edSignature="'* && "$ATTRS" == *'length="'* ]] || { echo 'sign_update failed' >&2; exit 1; }
+
+# A valid signature from the wrong key would publish an update no installed
+# app accepts. Check it against the public key the shipped app trusts.
+SIGNATURE="$(sed -E 's/.*sparkle:edSignature="([^"]+)".*/\1/' <<<"$ATTRS")"
+swift scripts/verify-ed-signature.swift "$PUBLIC_KEY" "$SIGNATURE" "$ZIP" \
+  || { echo "Release signature does not match SUPublicEDKey; check SPARKLE_PRIVATE_KEY" >&2; exit 1; }
 
 URL="https://github.com/$REPO/releases/download/v$VERSION/Harbour-Control-$VERSION.zip"
 NOTES="https://github.com/$REPO/releases/tag/v$VERSION"
@@ -53,4 +65,11 @@ cat > "$OUT/appcast.xml" <<XML
   </channel>
 </rss>
 XML
-echo "Appcast: $OUT/appcast.xml (build $BUILD)"
+
+# Sign the feed itself (the app sets SURequireSignedFeed): Sparkle embeds the
+# signature in the XML. The ZIP check above already proved this key is the
+# one the app trusts.
+sign "$OUT/appcast.xml"
+grep -q 'sparkle-signatures' "$OUT/appcast.xml" || { echo 'Appcast was not signed' >&2; exit 1; }
+sign --verify "$OUT/appcast.xml" >/dev/null || { echo 'Appcast signature does not verify' >&2; exit 1; }
+echo "Appcast: $OUT/appcast.xml (build $BUILD, signed)"

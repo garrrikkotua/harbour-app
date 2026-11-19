@@ -40,5 +40,9 @@
     <integer>86400</integer>
     <key>SUAllowsAutomaticUpdates</key>
     <true/>
+    <key>SURequireSignedFeed</key>
+    <true/>
+    <key>SUVerifyUpdateBeforeExtraction</key>
+    <true/>
 </dict>
 </plist>

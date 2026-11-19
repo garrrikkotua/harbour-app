@@ -4,10 +4,13 @@ import HarbourCore
 
 // MARK: - Attempt recorder
 
-/// Thread-safe owner of `/var/db/harbour/stats.json`. The sink threads and the
-/// kill loop record into memory; the main loop flushes at most every few seconds.
+/// Thread-safe owner of the block owner's `/var/db/harbour/stats-<uid>.json`.
+/// The sink threads and the kill loop record into memory; the main loop
+/// flushes at most every few seconds.
+///
+/// Attempts are deliberately not written to the daemon log, which other
+/// accounts on the Mac can read: the history file is the only record.
 final class AttemptRecorder {
-    static let path = "/var/db/harbour/stats.json"
     /// Read limit. Writes are compacted to `maxWriteBytes`, comfortably below
     /// it, so the daemon can always load what it saved.
     private static let maxFileBytes = 4 << 20
@@ -22,13 +25,21 @@ final class AttemptRecorder {
     /// Visited hostname → blocked entry (BlockedHostMatcher.lookup).
     private var hostLookup: [String: String] = [:]
     private let sessionStart: Date
-    /// The account that started the block; the only one granted read access.
-    private let readerUID: uid_t?
+    /// The account that started the block: whose history this is, and the
+    /// only one granted read access.
+    private let ownerUID: uid_t?
+    /// nil when the owner is unknown (a state from an older build): counts
+    /// then stay in memory rather than landing in someone else's history.
+    private let path: String?
 
-    init(sessionStart: Date, readerUID: uid_t?) {
+    init(sessionStart: Date, ownerUID: uid_t?) {
         self.sessionStart = sessionStart
-        self.readerUID = readerUID
-        var loaded = Self.load()
+        self.ownerUID = ownerUID
+        path = ownerUID.flatMap { $0 == 0 ? nil : AttemptStats.filePath(forUID: $0) }
+        if path == nil { log("stats: block owner unknown; attempts are not saved") }
+        // Pre-release builds kept one shared, world-readable file.
+        unlink("/var/db/harbour/stats.json")
+        var loaded = path.map(Self.load) ?? AttemptStats()
         loaded.beginSession(sessionStart)
         loaded.prune(now: Date())
         stats = loaded
@@ -38,7 +49,7 @@ final class AttemptRecorder {
     /// Existing history, or empty when there is none. A file that exists but
     /// can't be read is moved aside rather than overwritten, so a bad read
     /// never erases months of history.
-    private static func load() -> AttemptStats {
+    private static func load(_ path: String) -> AttemptStats {
         guard FileManager.default.fileExists(atPath: path) else { return AttemptStats() }
         if let data = SecureFileRead.regularFile(atPath: path, maxBytes: maxFileBytes),
            let stats = try? AttemptStats.decoder.decode(AttemptStats.self, from: data) {
@@ -77,7 +88,6 @@ final class AttemptRecorder {
         stats.record(.site, key: domain, at: now, sessionStart: sessionStart)
         dirty = true
         lock.unlock()
-        log("attempt: site \(domain)")
     }
 
     /// The kill loop terminated a process of the blocked bundle `path`.
@@ -88,10 +98,10 @@ final class AttemptRecorder {
         stats.record(.app, key: path, at: now, sessionStart: sessionStart)
         dirty = true
         lock.unlock()
-        log("attempt: app \(path)")
     }
 
     func flush(force: Bool = false) {
+        guard let path else { return }
         lock.lock()
         let now = Date()
         guard dirty, force || now.timeIntervalSince(lastFlush) >= 5 else { lock.unlock(); return }
@@ -101,7 +111,7 @@ final class AttemptRecorder {
         lock.unlock()
 
         snapshot.compact(toFit: Self.maxWriteBytes)
-        if let data = try? AttemptStats.encoder.encode(snapshot), write(data) { return }
+        if let data = try? AttemptStats.encoder.encode(snapshot), write(data, to: path) { return }
         // Keep the counts pending so the next tick (or the final flush) retries.
         lock.lock(); dirty = true; lock.unlock()
     }
@@ -109,8 +119,8 @@ final class AttemptRecorder {
     /// Writes through a temporary file that already has its final permissions:
     /// 0600 root, plus a read-only ACL entry for the user who started the block.
     /// Other accounts on the Mac can't read the history.
-    private func write(_ data: Data) -> Bool {
-        let tmp = Self.path + ".tmp"
+    private func write(_ data: Data, to path: String) -> Bool {
+        let tmp = path + ".tmp"
         unlink(tmp)
         let fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else {
@@ -125,12 +135,12 @@ final class AttemptRecorder {
             unlink(tmp)
             return false
         }
-        if let uid = readerUID, uid != 0, let name = Self.userName(uid) {
+        if let uid = ownerUID, let name = Self.userName(uid) {
             let (rc, out) = run("/bin/chmod", ["+a", "user:\(name) allow read", tmp], timeoutSec: 3)
             if rc != 0 { log("stats: could not grant \(name) read access: \(out)") }
         }
-        guard rename(tmp, Self.path) == 0 else {
-            log("stats: could not replace \(Self.path) (errno \(errno))")
+        guard rename(tmp, path) == 0 else {
+            log("stats: could not replace \(path) (errno \(errno))")
             unlink(tmp)
             return false
         }
@@ -242,16 +252,26 @@ final class AttemptSink {
         Self.removeAliasIfOwned()
     }
 
-    static func aliasPresent() -> Bool {
-        run("/sbin/ifconfig", ["lo0"], timeoutSec: 3).output.contains("inet \(address) ")
+    /// Whether lo0 carries the alias; nil when ifconfig couldn't tell.
+    static func aliasState() -> Bool? {
+        let (rc, out) = run("/sbin/ifconfig", ["lo0"], timeoutSec: 3)
+        guard rc == 0, out.contains("lo0:") else { return nil }
+        return out.contains("inet \(address) ")
     }
 
+    static func aliasPresent() -> Bool { aliasState() ?? true }
+
     /// Removes the alias only if Harbour added it, including one a crashed
-    /// earlier run left behind.
+    /// earlier run left behind. The ownership marker goes only once the alias
+    /// is confirmed gone, so a failed removal is retried by the next cleanup.
     static func removeAliasIfOwned() {
         guard FileManager.default.fileExists(atPath: ownerMarker) else { return }
-        if aliasPresent() {
+        if aliasState() != false {
             run("/sbin/ifconfig", ["lo0", "-alias", address], timeoutSec: 3)
+        }
+        guard aliasState() == false else {
+            log("sink: could not confirm \(address) was removed; will retry at next cleanup")
+            return
         }
         try? FileManager.default.removeItem(atPath: ownerMarker)
     }

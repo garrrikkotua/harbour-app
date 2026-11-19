@@ -4,8 +4,8 @@
 Default: app-only session. --include-websites also briefly blocks example.com
 and enables website firewall rules, which can reconnect network sessions.
 Does not modify GUI preferences or select any of the user's real apps.
-Both sessions check attempt counting; the real attempt history in
-/var/db/harbour/stats.json is backed up and restored afterwards.
+Both sessions check attempt counting; your real attempt history in
+/var/db/harbour/stats-<uid>.json is moved aside and restored afterwards.
 """
 import argparse
 import json
@@ -26,7 +26,8 @@ HOSTS = Path('/etc/hosts')
 PFCONF = Path('/etc/pf.conf')
 ANCHOR = Path('/etc/pf.anchors/org.harbour')
 TOKEN = Path('/etc/HarbourPFToken')
-STATS = Path('/var/db/harbour/stats.json')
+# History of the account that ran sudo, the owner recorded in state.json.
+STATS = Path(f"/var/db/harbour/stats-{os.environ.get('SUDO_UID', '0')}.json")
 SINK = '127.72.66.1'
 
 LABEL = 'system/com.harbour.daemon'
@@ -123,7 +124,7 @@ def session(folder, websites):
     # Fractional like the app's Date(); the daemon must keep it exactly.
     now = time.time() - 978307200  # Swift Date's 2001 reference epoch.
     duration = 60 if websites else 25
-    state = dict(startTime=now, endTime=now + duration,
+    state = dict(startTime=now, endTime=now + duration, ownerUID=test_user()[0],
                  domains=['example.com'] if websites else [],
                  blockedPaths=[str(bundle)], blockedBundleIDs=['test.harbour.disposable'])
     STATE.parent.mkdir(parents=True, exist_ok=True)
@@ -164,7 +165,16 @@ def session(folder, websites):
             print('PASS: website hosts entries and live PF rules installed', flush=True)
 
             assert alias_present(), f'Loopback alias {SINK} missing'
-            assert f'{SINK}\texample.com' in HOSTS.read_text(), 'Hosts entries do not point at the sink'
+            # Hosts switch to the sink only once PF rejects its other ports.
+            wait_for(lambda: f'{SINK}\texample.com' in HOSTS.read_text(), 20,
+                     'Hosts entries do not point at the sink')
+            assert f'to {SINK}' in run('/sbin/pfctl', '-a', 'org.harbour', '-sr').stdout, 'Sink guard rules missing'
+            assert f'{SINK}\tm.example.com' in HOSTS.read_text(), 'Mobile site not blocked'
+            try:
+                socket.create_connection((SINK, 8080), timeout=3).close()
+                raise AssertionError('Another port on the sink address accepted a connection')
+            except OSError:
+                pass
             tls_attempt('www.example.com')
             tls_attempt('example.com')          # same burst: still one attempt
             tls_attempt('unrelated.example')    # not blocked: never counted
@@ -187,6 +197,7 @@ def session(folder, websites):
         assert not alias_present(), f'Loopback alias {SINK} left behind'
         assert STATS.exists(), 'Attempt stats must outlive the block'
         assert STATS.stat().st_mode & 0o777 == 0o600, 'Attempt history must not be world-readable'
+        assert os.stat(log).st_mode & 0o777 == 0o600, 'Daemon log must be root-only'
         assert not Path('/var/db/harbour/sink-alias').exists(), 'Sink alias ownership marker left behind'
         # Compare nonempty lines because the existing marker stripper normalizes
         # whitespace around its own appended section.
@@ -231,7 +242,7 @@ def main():
     test_user()
     # Keep the user's real attempt history out of the test and restore it
     # after. Moving the file keeps its owner, mode and read ACL intact.
-    saved_stats = STATS.with_name('stats.json.smoke-backup')
+    saved_stats = STATS.with_name(STATS.name + '.smoke-backup')
     if saved_stats.exists():
         parser.error(f'{saved_stats} exists from an interrupted run; restore it to {STATS} first.')
     had_stats = STATS.exists()

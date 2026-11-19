@@ -80,7 +80,7 @@ final class BlockManager: ObservableObject {
     private let configURL: URL
     private let additionsURL: URL
     private let stateFile = "/var/db/harbour/state.json"
-    private let statsFile = "/var/db/harbour/stats.json"
+    private let statsFile = AttemptStats.filePath(forUID: getuid())
     private var statsMtime: Date?
     private var timer: Timer?
 
@@ -175,13 +175,20 @@ final class BlockManager: ObservableObject {
     /// Re-reads the stats file only when the daemon has rewritten it.
     private func refreshStats() {
         guard demo == nil else { return }
-        let mtime = (try? FileManager.default.attributesOfItem(atPath: statsFile))?[.modificationDate] as? Date
-        guard mtime != statsMtime else { return }
-        statsMtime = mtime
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: statsFile)) else { return }
-        if let stats = try? AttemptStats.decoder.decode(AttemptStats.self, from: data), stats != attemptStats {
-            attemptStats = stats
+        guard FileManager.default.fileExists(atPath: statsFile) else {
+            // History removed: stop showing it.
+            statsMtime = nil
+            if attemptStats != AttemptStats() { attemptStats = AttemptStats() }
+            return
         }
+        let mtime = (try? FileManager.default.attributesOfItem(atPath: statsFile))?[.modificationDate] as? Date
+        guard mtime == nil || mtime != statsMtime else { return }
+        // Remember the version only once it decoded, so a failed read is
+        // retried on the next tick instead of leaving stale counts up.
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: statsFile)),
+              let stats = try? AttemptStats.decoder.decode(AttemptStats.self, from: data) else { return }
+        statsMtime = mtime
+        if stats != attemptStats { attemptStats = stats }
     }
 
     func refreshState() {
@@ -251,7 +258,8 @@ final class BlockManager: ObservableObject {
             domains: config.domains,
             blockedPaths: config.apps.map(\.path),
             blockedBundleIDs: config.apps.map(\.bundleID),
-            additionsPath: additionsURL.path
+            additionsPath: additionsURL.path,
+            ownerUID: getuid()
         )
         if demo != nil {
             // Demo: pretend the helper installed; nothing leaves this process.

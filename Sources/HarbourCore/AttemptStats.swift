@@ -95,6 +95,12 @@ public struct AttemptStats: Codable, Equatable {
         return d
     }()
 
+    /// Each account has its own history file under the root-owned state
+    /// directory, so one person's attempts are never shown to another.
+    public static func filePath(forUID uid: UInt32) -> String {
+        "/var/db/harbour/stats-\(uid).json"
+    }
+
     /// Days older than this are dropped so the root-written file stays small.
     public static let retentionDays = 400
     /// Caps per-day keys; a misbehaving client can't grow the file without bound.
@@ -224,7 +230,9 @@ public enum BlockedHostMatcher {
     /// Hostname → blocked entry for every name a visit can use: the entry's
     /// bare and `www.` forms, its mobile sites and its sibling sites
     /// (`RelatedDomains.siteHostnames`). Asset hosts such as `pbs.twimg.com`
-    /// are left out, so a cached page fetching images never counts. A name an
+    /// are left out, even when an entry names one directly (the YouTube
+    /// preset lists `i.ytimg.com`), so a cached page fetching images never
+    /// counts. A name an
     /// entry covers directly wins over one it only reaches through expansion.
     public static func lookup(blocked: [String]) -> [String: String] {
         var direct: [String: String] = [:]
@@ -232,6 +240,8 @@ public enum BlockedHostMatcher {
         for domain in blocked {
             let d = normalize(domain)
             let bare = d.hasPrefix("www.") ? String(d.dropFirst(4)) : d
+            // Listed by a preset for enforcement, but not a visit.
+            if RelatedDomains.assetHosts.contains(bare) { continue }
             for name in [bare, "www.\(bare)"] where direct[name] == nil { direct[name] = domain }
             for name in RelatedDomains.siteHostnames(for: [domain]) where expanded[name] == nil {
                 expanded[name] = domain

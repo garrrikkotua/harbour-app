@@ -59,6 +59,17 @@ public enum RelatedDomains {
         "twitch.tv": Companions(assets: ["gql.twitch.tv", "static.twitchcdn.net"]),
     ]
 
+    /// Hosts that only serve data, scripts or media for a site, never a page
+    /// someone opens: every companion asset plus those the presets list
+    /// explicitly (DomainPreset.videoStreaming). Blocked like any entry, but
+    /// a request for one is never counted as an attempt.
+    public static let assetHosts: Set<String> = Set(companions.values.flatMap(\.assets)).union([
+        "ytimg.com", "i.ytimg.com", "s.ytimg.com",
+        "yt3.ggpht.com", "yt3.googleusercontent.com",
+        "googlevideo.com", "youtubei.googleapis.com",
+        "nflxvideo.net",
+    ])
+
     /// Exact hostnames to block for `domains`, sorted and deduplicated.
     /// Unsafe entries are dropped. With `includeRelated: false` only the bare
     /// and `www.` forms are produced (used for the secure DNS endpoints).

@@ -44,6 +44,10 @@ public struct BlockState: Codable {
     /// Absolute path to the user-writable additions file the GUI appends to.
     /// Optional for backwards compat — if nil, the daemon skips polling for additions.
     public var additionsPath: String?
+    /// UID of the account that started the block. Its attempt history is
+    /// kept in its own file, readable only by that account. Optional for
+    /// states written by older builds.
+    public var ownerUID: UInt32?
 
     public init(
         startTime: Date,
@@ -51,7 +55,8 @@ public struct BlockState: Codable {
         domains: [String],
         blockedPaths: [String],
         blockedBundleIDs: [String],
-        additionsPath: String? = nil
+        additionsPath: String? = nil,
+        ownerUID: UInt32? = nil
     ) {
         self.startTime = startTime
         self.endTime = endTime
@@ -59,6 +64,7 @@ public struct BlockState: Codable {
         self.blockedPaths = blockedPaths
         self.blockedBundleIDs = blockedBundleIDs
         self.additionsPath = additionsPath
+        self.ownerUID = ownerUID
     }
 }
 
