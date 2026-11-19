@@ -5,17 +5,19 @@ Default: app-only session. --include-websites also briefly blocks example.com
 and enables website firewall rules, which can reconnect network sessions.
 Does not modify GUI preferences or select any of the user's real apps.
 Both sessions check attempt counting; your real attempt history in
-/var/db/harbour/stats-<uid>.json is moved aside and restored afterwards.
+/var/db/harbour/stats-<account UUID>.json is moved aside and restored afterwards.
 """
 import argparse
 import json
 import os
 from pathlib import Path
 import plistlib
+import pwd
 import shutil
 import socket
 import ssl
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -26,8 +28,22 @@ HOSTS = Path('/etc/hosts')
 PFCONF = Path('/etc/pf.conf')
 ANCHOR = Path('/etc/pf.anchors/org.harbour')
 TOKEN = Path('/etc/HarbourPFToken')
-# History of the account that ran sudo, the owner recorded in state.json.
-STATS = Path(f"/var/db/harbour/stats-{os.environ.get('SUDO_UID', '0')}.json")
+
+
+def account_stats_path():
+    """History of the account that ran sudo (the owner recorded in
+    state.json), named by its GeneratedUID like the daemon does."""
+    uid = int(os.environ.get('SUDO_UID', 0))
+    if uid == 0:
+        return Path('/var/db/harbour/stats-unknown.json')
+    name = pwd.getpwuid(uid).pw_name
+    out = subprocess.run(['/usr/bin/dscl', '.', '-read', f'/Users/{name}', 'GeneratedUID'],
+                         capture_output=True, text=True, timeout=10).stdout
+    generated = out.split(':', 1)[-1].strip().upper()
+    return Path(f'/var/db/harbour/stats-{generated}.json')
+
+
+STATS = account_stats_path()
 SINK = '127.72.66.1'
 
 LABEL = 'system/com.harbour.daemon'
@@ -90,24 +106,52 @@ def launch(executable):
     return subprocess.Popen([str(executable), '60'], user=uid, group=gid, extra_groups=[])
 
 
-def tls_attempt(host):
-    """Open a TLS connection to the sink as a browser would; it must be reset."""
-    context = ssl.create_default_context()
+# Attempts run in a child process as the test user: the daemon only counts
+# connections opened by the block owner's account.
+TLS_CLIENT = """
+import socket, ssl, sys
+try:
+    with socket.create_connection((sys.argv[1], 443), timeout=5) as raw:
+        with ssl.create_default_context().wrap_socket(raw, server_hostname=sys.argv[2]):
+            sys.exit(3)  # handshake completed: the sink must reset instead
+except (ssl.SSLError, OSError):
+    pass  # reset or EOF during the handshake: blocked as intended
+"""
+
+HTTP_CLIENT = """
+import socket, sys
+with socket.create_connection((sys.argv[1], 80), timeout=5) as conn:
+    conn.sendall(('GET / HTTP/1.1\\r\\nHost: %s\\r\\n\\r\\n' % sys.argv[2]).encode())
     try:
-        with socket.create_connection((SINK, 443), timeout=5) as raw:
-            with context.wrap_socket(raw, server_hostname=host):
-                raise AssertionError('Sink completed a TLS handshake; it must reset instead')
-    except (ssl.SSLError, OSError):
-        pass  # reset or EOF during the handshake: blocked as intended
+        if conn.recv(1) != b'':
+            sys.exit(3)  # the sink must not serve a response
+    except ConnectionError:
+        pass
+"""
+
+
+def attempt(client, host, as_root=False):
+    uid, gid = test_user()
+    extra = {} if as_root else dict(user=uid, group=gid, extra_groups=[])
+    result = subprocess.run([sys.executable, '-I', '-c', client, SINK, host],
+                            timeout=15, **extra)
+    assert result.returncode == 0, f'Sink answered {host} instead of resetting'
+
+
+def tls_attempt(host, as_root=False):
+    attempt(TLS_CLIENT, host, as_root)
 
 
 def http_attempt(host):
-    with socket.create_connection((SINK, 80), timeout=5) as conn:
-        conn.sendall(f'GET / HTTP/1.1\r\nHost: {host}\r\n\r\n'.encode())
-        try:
-            assert conn.recv(1) == b'', 'Sink must not serve a response'
-        except ConnectionError:
-            pass
+    attempt(HTTP_CLIENT, host)
+
+
+def reachable(address, port):
+    try:
+        socket.create_connection((address, port), timeout=3).close()
+        return True
+    except OSError:
+        return False
 
 
 def session(folder, websites):
@@ -168,19 +212,27 @@ def session(folder, websites):
             # Hosts switch to the sink only once PF rejects its other ports.
             wait_for(lambda: f'{SINK}\texample.com' in HOSTS.read_text(), 20,
                      'Hosts entries do not point at the sink')
-            assert f'to {SINK}' in run('/sbin/pfctl', '-a', 'org.harbour', '-sr').stdout, 'Sink guard rules missing'
             assert f'{SINK}\tm.example.com' in HOSTS.read_text(), 'Mobile site not blocked'
-            try:
-                socket.create_connection((SINK, 8080), timeout=3).close()
-                raise AssertionError('Another port on the sink address accepted a connection')
-            except OSError:
-                pass
+            # A local service on all interfaces must stay reachable on its own
+            # address (control) but not through the sink address.
+            with socket.socket() as service:
+                service.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                service.bind(('0.0.0.0', 0))
+                service.listen(4)
+                port = service.getsockname()[1]
+                assert reachable('127.0.0.1', port), 'Control: local test service unreachable'
+                assert not reachable(SINK, port), f'Port {port} on the sink address reached a local service'
+            print('PASS: other ports on the sink address are rejected', flush=True)
             tls_attempt('www.example.com')
             tls_attempt('example.com')          # same burst: still one attempt
             tls_attempt('unrelated.example')    # not blocked: never counted
             wait_for(lambda: session_counts(start_key)[0].get('example.com') == 1, 12,
                      'TLS attempts were not counted as exactly one')
             time.sleep(10.5)                     # past the 10 s burst window
+            # Another account's attempt (root here) must not reach this history.
+            tls_attempt('m.example.com', as_root=True)
+            time.sleep(3)
+            assert session_counts(start_key)[0].get('example.com') == 1, "Another account's attempt was counted"
             http_attempt('example.com:80')
             wait_for(lambda: session_counts(start_key)[0].get('example.com') == 2, 12,
                      'HTTP attempt after the burst window was not counted')

@@ -4,7 +4,7 @@ import HarbourCore
 
 // MARK: - Attempt recorder
 
-/// Thread-safe owner of the block owner's `/var/db/harbour/stats-<uid>.json`.
+/// Thread-safe owner of the block owner's `/var/db/harbour/stats-<account UUID>.json`.
 /// The sink threads and the kill loop record into memory; the main loop
 /// flushes at most every few seconds.
 ///
@@ -32,10 +32,13 @@ final class AttemptRecorder {
     /// then stay in memory rather than landing in someone else's history.
     private let path: String?
 
+    /// The block owner, or nil when unknown (then nothing is recorded).
+    var ownerUIDValue: uid_t? { ownerUID }
+
     init(sessionStart: Date, ownerUID: uid_t?) {
         self.sessionStart = sessionStart
         self.ownerUID = ownerUID
-        path = ownerUID.flatMap { $0 == 0 ? nil : AttemptStats.filePath(forUID: $0) }
+        path = ownerUID.flatMap { AttemptStats.filePath(forUID: $0) }
         if path == nil { log("stats: block owner unknown; attempts are not saved") }
         // Pre-release builds kept one shared, world-readable file.
         unlink("/var/db/harbour/stats.json")
@@ -77,16 +80,26 @@ final class AttemptRecorder {
         for p in paths { appBursts.suppress(p, at: now) }
     }
 
-    /// A browser connected to the sink asking for `host`.
-    func recordHost(_ host: String) {
+    /// A browser connected to the sink asking for `host`. `connectionOwner`
+    /// finds the account that opened the connection: hosts entries apply to
+    /// every user on the Mac, but only the block owner's attempts belong in
+    /// the owner's history. When attribution fails nothing is counted.
+    func recordHost(_ host: String, connectionOwner: () -> uid_t?) {
+        guard let owner = ownerUID else { return }
+        lock.lock()
+        guard let domain = BlockedHostMatcher.match(host: host, in: hostLookup),
+              siteBursts.wouldCount(domain, at: Date()) else { lock.unlock(); return }
+        lock.unlock()
+        // Outside the lock: looking up the socket's owner spawns lsof.
+        guard connectionOwner() == owner else { return }
         lock.lock()
         // Sampled under the lock so concurrent connections are debounced in
         // the order they're recorded.
         let now = Date()
-        guard let domain = BlockedHostMatcher.match(host: host, in: hostLookup),
-              siteBursts.shouldCount(domain, at: now) else { lock.unlock(); return }
-        stats.record(.site, key: domain, at: now, sessionStart: sessionStart)
-        dirty = true
+        if siteBursts.shouldCount(domain, at: now) {
+            stats.record(.site, key: domain, at: now, sessionStart: sessionStart)
+            dirty = true
+        }
         lock.unlock()
     }
 
@@ -135,9 +148,18 @@ final class AttemptRecorder {
             unlink(tmp)
             return false
         }
-        if let uid = ownerUID, let name = Self.userName(uid) {
-            let (rc, out) = run("/bin/chmod", ["+a", "user:\(name) allow read", tmp], timeoutSec: 3)
-            if rc != 0 { log("stats: could not grant \(name) read access: \(out)") }
+        // Without the owner's read access the app couldn't show the history;
+        // keep the previous file and retry rather than replace it.
+        guard let uid = ownerUID, let name = Self.userName(uid) else {
+            log("stats: no account name for the block owner; not saving")
+            unlink(tmp)
+            return false
+        }
+        let (rc, out) = run("/bin/chmod", ["+a", "user:\(name) allow read", tmp], timeoutSec: 3)
+        guard rc == 0 else {
+            log("stats: could not grant the owner read access: \(out)")
+            unlink(tmp)
+            return false
         }
         guard rename(tmp, path) == 0 else {
             log("stats: could not replace \(path) (errno \(errno))")
@@ -175,7 +197,9 @@ final class AttemptSink {
     static let ownerMarker = "/var/db/harbour/sink-alias"
 
     private var listeners: [Int32] = []
-    private let onHost: (String) -> Void
+    /// Called with the requested hostname and the client's TCP port while the
+    /// connection is still open, so its owning process can be looked up.
+    private let onHost: (String, UInt16) -> Void
     private let stateLock = NSLock()
     private var stopped = false
     private var thread: Thread?
@@ -184,7 +208,7 @@ final class AttemptSink {
     /// Caps concurrent connections; extras are reset immediately.
     private let slots = DispatchSemaphore(value: 16)
 
-    init(onHost: @escaping (String) -> Void) {
+    init(onHost: @escaping (String, UInt16) -> Void) {
         self.onHost = onHost
     }
 
@@ -201,8 +225,11 @@ final class AttemptSink {
         } else {
             // Record ownership before adding, so a crash in between still
             // lets the next run clean up.
-            FileManager.default.createFile(atPath: Self.ownerMarker, contents: Data(),
-                                           attributes: [.posixPermissions: 0o600])
+            guard FileManager.default.createFile(atPath: Self.ownerMarker, contents: Data(),
+                                                 attributes: [.posixPermissions: 0o600]) else {
+                log("sink: could not record alias ownership; attempts will not be counted")
+                return false
+            }
             let (rc, _) = run("/sbin/ifconfig", ["lo0", "alias", Self.address, "up"], timeoutSec: 3)
             guard rc == 0 else {
                 try? FileManager.default.removeItem(atPath: Self.ownerMarker)
@@ -261,6 +288,74 @@ final class AttemptSink {
 
     static func aliasPresent() -> Bool { aliasState() ?? true }
 
+    /// The account owning the client end of a loopback connection to the
+    /// sink from local port `clientPort`, via lsof (root sees every process).
+    /// nil when it can't be determined.
+    static func connectionOwnerUID(clientPort: UInt16) -> uid_t? {
+        let (rc, out) = run("/usr/sbin/lsof", ["-nP", "-iTCP@\(address)", "-sTCP:ESTABLISHED", "-F", "pun"],
+                            timeoutSec: 2)
+        guard rc == 0 else { return nil }
+        // -F output: p<pid>, u<uid>, then one n<local>-><remote> per socket.
+        var uid: uid_t?
+        var owners = Set<uid_t>()
+        for line in out.split(separator: "\n") {
+            switch line.first {
+            case "p": uid = nil
+            case "u": uid = uid_t(line.dropFirst())
+            case "n":
+                let name = line.dropFirst()
+                if let u = uid, name.contains(":\(clientPort)->\(address):") { owners.insert(u) }
+            default: break
+            }
+        }
+        // Exactly one owner, and not the daemon's own (root) accepted end.
+        guard owners.count == 1, let owner = owners.first, owner != 0 else { return nil }
+        return owner
+    }
+
+    /// Whether PF really rejects other ports on the sink address: listens on
+    /// a probe port there and tries to connect to it. A connection that gets
+    /// through means a local service on that port could too.
+    static func guardIsEffective() -> Bool {
+        let server = socket(AF_INET, SOCK_STREAM, 0)
+        guard server >= 0 else { return false }
+        defer { close(server) }
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = 0
+        inet_pton(AF_INET, address, &addr.sin_addr)
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let ready = withUnsafeMutablePointer(to: &addr) { ptr -> Bool in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(server, $0, length) == 0 && Darwin.listen(server, 1) == 0
+                    && getsockname(server, $0, &length) == 0
+            }
+        }
+        guard ready, addr.sin_port != 0 else { return false }
+
+        let client = socket(AF_INET, SOCK_STREAM, 0)
+        guard client >= 0 else { return false }
+        defer { close(client) }
+        _ = fcntl(client, F_SETFL, fcntl(client, F_GETFL) | O_NONBLOCK)
+        let rc = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(client, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        if rc == 0 { return false }  // connected: not filtered
+        if errno == ECONNREFUSED { return true }
+        guard errno == EINPROGRESS else { return false }
+        var pfd = pollfd(fd: client, events: Int16(POLLOUT), revents: 0)
+        guard poll(&pfd, 1, 1000) > 0 else { return false }  // undecided: stay safe
+        var err: Int32 = 0
+        var errLength = socklen_t(MemoryLayout<Int32>.size)
+        getsockopt(client, SOL_SOCKET, SO_ERROR, &err, &errLength)
+        // Reset by PF's "block return" counts as rejected; success or any
+        // other outcome does not.
+        return err == ECONNREFUSED || err == ECONNRESET
+    }
+
     /// Removes the alias only if Harbour added it, including one a crashed
     /// earlier run left behind. The ownership marker goes only once the alias
     /// is confirmed gone, so a failed removal is retried by the next cleanup.
@@ -313,14 +408,18 @@ final class AttemptSink {
             let ready = poll(&pfds, nfds_t(pfds.count), 500)
             if ready <= 0 { continue }
             for p in pfds where p.revents & Int16(POLLIN) != 0 {
-                let client = accept(p.fd, nil, nil)
+                var peer = sockaddr_in()
+                var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+                let client = withUnsafeMutablePointer(to: &peer) {
+                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { accept(p.fd, $0, &length) }
+                }
                 guard client >= 0 else { continue }
-                handle(client)
+                handle(client, peerPort: UInt16(bigEndian: peer.sin_port))
             }
         }
     }
 
-    private func handle(_ fd: Int32) {
+    private func handle(_ fd: Int32, peerPort: UInt16) {
         var yes: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, socklen_t(MemoryLayout<Int32>.size))
         // accept() inherits O_NONBLOCK; reads below rely on a receive timeout.
@@ -331,9 +430,8 @@ final class AttemptSink {
         }
         connections.async { [self] in
             defer { slots.signal() }
-            let host = Self.readHost(fd)
+            if let host = Self.readHost(fd) { onHost(host, peerPort) }
             Self.reset(fd)
-            if let host { onHost(host) }
         }
     }
 

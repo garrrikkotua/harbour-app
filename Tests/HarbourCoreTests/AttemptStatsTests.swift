@@ -140,6 +140,15 @@ final class AttemptStatsTests: XCTestCase {
                           AttemptStats.dayKey(for: now).prefix(4))
     }
 
+    func test_historyFileIsNamedByAccountUUID() {
+        let path = AttemptStats.filePath(forUID: getuid())
+        XCTAssertNotNil(path)
+        XCTAssertFalse(path!.contains("\(getuid())."), "UIDs are reused; the name must not be the UID")
+        XCTAssertNil(AttemptStats.filePath(forUID: 0))
+        // No such account: the system's synthesized UUID is rejected.
+        XCTAssertNil(AttemptStats.filePath(forUID: 98765))
+    }
+
     // MARK: Debouncer
 
     func test_debouncer_collapsesBursts() {
@@ -157,6 +166,15 @@ final class AttemptStatsTests: XCTestCase {
         d.suppress("/Applications/Slack.app", at: t)
         XCTAssertFalse(d.shouldCount("/Applications/Slack.app", at: t.addingTimeInterval(1)))
         XCTAssertTrue(d.shouldCount("/Applications/Slack.app", at: t.addingTimeInterval(6)))
+    }
+
+    func test_debouncer_wouldCountDoesNotRecord() {
+        var d = AttemptDebouncer(window: 10)
+        let t = date("2026-11-19T09:00:00Z")
+        XCTAssertTrue(d.wouldCount("x.com", at: t))
+        XCTAssertTrue(d.shouldCount("x.com", at: t.addingTimeInterval(1)))
+        XCTAssertFalse(d.wouldCount("x.com", at: t.addingTimeInterval(5)))
+        XCTAssertTrue(d.wouldCount("x.com", at: t.addingTimeInterval(11)))
     }
 
     func test_debouncer_clockGoingBackwardsCounts() {

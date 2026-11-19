@@ -80,6 +80,7 @@ final class BlockManager: ObservableObject {
     private let configURL: URL
     private let additionsURL: URL
     private let stateFile = "/var/db/harbour/state.json"
+    /// nil if this account has no history file name (no real account UUID).
     private let statsFile = AttemptStats.filePath(forUID: getuid())
     private var statsMtime: Date?
     private var timer: Timer?
@@ -174,7 +175,7 @@ final class BlockManager: ObservableObject {
 
     /// Re-reads the stats file only when the daemon has rewritten it.
     private func refreshStats() {
-        guard demo == nil else { return }
+        guard demo == nil, let statsFile else { return }
         guard FileManager.default.fileExists(atPath: statsFile) else {
             // History removed: stop showing it.
             statsMtime = nil

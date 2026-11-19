@@ -142,7 +142,7 @@ struct FAQView: View {
 
                 Active block: `/var/db/harbour/state.json` (removed when the timer ends)
 
-                Attempt stats: `/var/db/harbour/stats-<your user id>.json` (kept between blocks, readable only by you, stays on this Mac)
+                Attempt stats: `/var/db/harbour/stats-<your account ID>.json` (kept between blocks, readable only by you, stays on this Mac)
 
                 Daemon: `/Library/PrivilegedHelperTools/com.harbour.daemon` and `/Library/LaunchDaemons/com.harbour.daemon.plist`
 

@@ -194,7 +194,7 @@ func log(_ msg: String) {
 /// listens *and* PF rejects every other port on its address (see
 /// `sinkGuardRules`), otherwise the 0.0.0.0 null route.
 func hostsIPv4Sink() -> String {
-    pfLock.lock(); defer { pfLock.unlock() }
+    sinkStateLock.lock(); defer { sinkStateLock.unlock() }
     return sinkGuardLoaded ? AttemptSink.address : "0.0.0.0"
 }
 
@@ -394,11 +394,23 @@ var pfResolvedNothing = false
 /// while one is in flight so slow DNS can't pile up work. Guarded by pfLock.
 var pfJobsPending = 0
 /// The sink is listening, so the next anchor must include `sinkGuardRules`.
+/// Guarded by pfLock.
 var sinkGuardWanted = false
-/// PF accepted an anchor with the guard rules; hosts may use the sink.
+/// Short-held, separate from pfLock: the 1-second enforcement tick reads
+/// these and must never wait behind pfctl subprocesses.
+let sinkStateLock = NSLock()
+/// A live probe confirmed the guard rejects other ports; hosts may use the sink.
 var sinkGuardLoaded = false
 /// Set when `sinkGuardLoaded` flips, so the main loop rewrites hosts at once.
 var hostsSinkChanged = false
+
+/// Publishes whether the guard is effective; flags a hosts rewrite on change.
+func setSinkGuard(_ effective: Bool) {
+    sinkStateLock.lock(); defer { sinkStateLock.unlock() }
+    guard sinkGuardLoaded != effective else { return }
+    sinkGuardLoaded = effective
+    hostsSinkChanged = true
+}
 
 func applyPF(domains: [String]) {
     // Skip entirely for app-only blocks.
@@ -474,11 +486,19 @@ func applyPF(domains: [String]) {
     let (rc, out) = run("/sbin/pfctl", args, timeoutSec: 10)
     log("pfctl \(args.joined(separator: " ")) => rc=\(rc) out=\(out.trimmingCharacters(in: .whitespacesAndNewlines))")
     if rc == 0 {
-        if sinkGuardWanted && !sinkGuardLoaded {
-            // Only now may blocked names point at the sink.
-            sinkGuardLoaded = true
-            hostsSinkChanged = true
-            log("sink: other ports on \(AttemptSink.address) are rejected; counting website attempts")
+        if sinkGuardWanted {
+            // pfctl succeeding doesn't prove the rules apply (the main
+            // ruleset may not reference the anchor, or an earlier quick rule
+            // may win). Check by connecting to a probe port on the sink
+            // address; re-checked on every refresh, falling back if lost.
+            let effective = AttemptSink.guardIsEffective()
+            let was = hostsIPv4Sink() == AttemptSink.address
+            if effective != was {
+                log(effective
+                    ? "sink: other ports on \(AttemptSink.address) are rejected; counting website attempts"
+                    : "sink: other ports on \(AttemptSink.address) are reachable; using the null route")
+            }
+            setSinkGuard(effective)
         }
         if isRefresh {
             // New live additions must also stop connections already in PF's
@@ -512,9 +532,9 @@ func removePF() {
     pfShuttingDown = true
     let wasModified = pfConfModified
     // Without the guard rules the sink address must not be used again.
-    sinkGuardLoaded = false
     sinkGuardWanted = false
     pfLock.unlock()
+    setSinkGuard(false)
 
     guard wasModified || FileManager.default.fileExists(atPath: pfAnchorFile)
         || FileManager.default.fileExists(atPath: pfTokenFile)
@@ -663,10 +683,11 @@ func runningBundles(targets: [(target: String, bundle: String)]) -> [String] {
     return Array(running)
 }
 
-/// Returns the blocked bundle paths that had a process terminated.
+/// Returns the blocked bundle paths that had a process terminated, with the
+/// account each process belonged to.
 @discardableResult
-func killBlockedApps(targets: [(target: String, bundle: String)]) -> Set<String> {
-    var killed = Set<String>()
+func killBlockedApps(targets: [(target: String, bundle: String)]) -> [(bundle: String, uid: uid_t)] {
+    var killed: [(bundle: String, uid: uid_t)] = []
     guard !targets.isEmpty else { return killed }
     let ownPID = getpid()
     for (pid, procPath) in listProcesses() {
@@ -682,9 +703,10 @@ func killBlockedApps(targets: [(target: String, bundle: String)]) -> Set<String>
             if Safety.matchesApp(executable: procPath, bundlePath: target) {
                 // Only user-owned processes: never root helpers or agents.
                 guard let uid = processOwnerUID(pid), Safety.mayTerminate(processOwnerUID: uid) else { break }
+                // Not logged: the log would become a second, timestamped
+                // record of attempts outside the owner's history file.
                 if kill(pid, SIGKILL) == 0 {
-                    log("killed pid=\(pid) path=\(procPath)")
-                    killed.insert(bundle)
+                    killed.append((bundle: bundle, uid: uid))
                 }
                 break
             }
@@ -825,7 +847,9 @@ var sinkAttempted = false
 func startSinkIfNeeded() {
     guard !sinkAttempted, !effectiveDomains.isEmpty else { return }
     sinkAttempted = true
-    let sink = AttemptSink(onHost: { recorder.recordHost($0) })
+    let sink = AttemptSink(onHost: { host, port in
+        recorder.recordHost(host, connectionOwner: { AttemptSink.connectionOwnerUID(clientPort: port) })
+    })
     // A main ruleset that skips loopback would ignore the guard rules.
     let conf = (try? String(contentsOfFile: pfMainConf, encoding: .utf8)) ?? ""
     let skipsLoopback = conf.split(separator: "\n").contains { line in
@@ -927,7 +951,8 @@ func reloadAdditionsIfChanged() -> Bool {
     if newD + newP > 0 {
         let persisted = BlockState(startTime: state.startTime, endTime: state.endTime,
             domains: effectiveDomains, blockedPaths: effectivePaths,
-            blockedBundleIDs: effectiveBundleIDs, additionsPath: state.additionsPath)
+            blockedBundleIDs: effectiveBundleIDs, additionsPath: state.additionsPath,
+            ownerUID: state.ownerUID)
         if let data = try? JSONEncoder().encode(persisted) {
             do { try data.write(to: URL(fileURLWithPath: stateFile), options: .atomic) }
             catch { log("could not persist additions: \(error)") }
@@ -939,8 +964,10 @@ func reloadAdditionsIfChanged() -> Bool {
 // Re-apply hosts + pf periodically in case something overwrites them or IPs change
 var tick = 0
 while Date() < state.endTime && !terminationRequested {
-    for bundle in killBlockedApps(targets: killTargets) {
-        recorder.recordApp(bundle)
+    // Every account's processes are closed, but only the block owner's
+    // launches go into the owner's history.
+    for kill in killBlockedApps(targets: killTargets) where kill.uid == recorder.ownerUIDValue {
+        recorder.recordApp(kill.bundle)
     }
     recorder.flush()
     tick += 1
@@ -977,11 +1004,11 @@ while Date() < state.endTime && !terminationRequested {
         log("tick=\(tick) procs=\(procs.count) matches=\(matchCount) nearMiss=\(nearMiss.count)")
         for line in nearMiss { log("near-miss: \(line)") }
     }
-    pfLock.lock()
-    let sinkReady = hostsSinkChanged
+    sinkStateLock.lock()
+    let sinkChanged = hostsSinkChanged
     hostsSinkChanged = false
-    pfLock.unlock()
-    if sinkReady { applyHosts(domains: effectiveDomains) }
+    sinkStateLock.unlock()
+    if sinkChanged { applyHosts(domains: effectiveDomains) }
     if tick % 30 == 0 {
         applyHosts(domains: effectiveDomains)
         killTargets = enforcementTargets(for: effectivePaths)

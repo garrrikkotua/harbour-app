@@ -23,6 +23,12 @@ cp "$BIN_DIR/Harbour" "$APP_DIR/Contents/MacOS/Harbour"
 # Sparkle ships as a dynamic framework; SwiftPM links it via @rpath.
 SPARKLE="$APP_DIR/Contents/Frameworks/Sparkle.framework"
 ditto "$BIN_DIR/Sparkle.framework" "$SPARKLE"
+# Sparkle's license (with its bundled third-party notices) ships next to the
+# framework, not inside it; binary redistribution must include it.
+SPARKLE_LICENSE="$(find .build/artifacts -path '*/Sparkle/LICENSE' -type f | head -n 1)"
+[[ -f "$SPARKLE_LICENSE" ]] || { echo "Sparkle LICENSE not found; run swift package resolve" >&2; exit 1; }
+mkdir -p "$APP_DIR/Contents/Resources"
+cp "$SPARKLE_LICENSE" "$APP_DIR/Contents/Resources/Sparkle-LICENSE.txt"
 # The XPC services are only needed by sandboxed apps; Harbour is not sandboxed.
 rm -rf "$SPARKLE/Versions/B/XPCServices" "$SPARKLE/XPCServices"
 if ! otool -l "$APP_DIR/Contents/MacOS/Harbour" | grep -q '@executable_path/../Frameworks'; then

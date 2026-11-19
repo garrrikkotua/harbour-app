@@ -96,9 +96,22 @@ public struct AttemptStats: Codable, Equatable {
     }()
 
     /// Each account has its own history file under the root-owned state
-    /// directory, so one person's attempts are never shown to another.
-    public static func filePath(forUID uid: UInt32) -> String {
-        "/var/db/harbour/stats-\(uid).json"
+    /// directory, so one person's attempts are never shown to another. It is
+    /// named by the account's UUID, not its UID: macOS can give a deleted
+    /// account's UID to a new user, who must not inherit that history.
+    /// nil when the UID has no real account (or is root).
+    public static func filePath(forUID uid: UInt32) -> String? {
+        guard uid != 0, let id = accountUUID(uid) else { return nil }
+        return "/var/db/harbour/stats-\(id).json"
+    }
+
+    /// The account's GeneratedUID. Unknown UIDs get a synthesized
+    /// FFFFEEEE-DDDD-CCCC-BBBB-AAAA… value from the system, which is rejected.
+    public static func accountUUID(_ uid: UInt32) -> String? {
+        var bytes = [UInt8](repeating: 0, count: 16)
+        guard mbr_uid_to_uuid(uid, &bytes) == 0 else { return nil }
+        let id = NSUUID(uuidBytes: bytes).uuidString
+        return id.hasPrefix("FFFFEEEE-DDDD-CCCC-BBBB-AAAA") ? nil : id
     }
 
     /// Days older than this are dropped so the root-written file stays small.
@@ -197,6 +210,10 @@ public struct AttemptStats: Codable, Equatable {
     }
 }
 
+// membership.h isn't exposed to Swift; the symbol is in libSystem.
+@_silgen_name("mbr_uid_to_uuid")
+private func mbr_uid_to_uuid(_ uid: uid_t, _ uu: UnsafeMutablePointer<UInt8>) -> Int32
+
 /// Collapses bursts into single attempts. One page load opens several
 /// connections and one app launch can spawn several processes; each burst
 /// should count once.
@@ -216,6 +233,12 @@ public struct AttemptDebouncer {
         }
         lastSeen[key] = date
         return true
+    }
+
+    /// Whether `shouldCount` would count `key` now, without recording it.
+    public func wouldCount(_ key: String, at date: Date) -> Bool {
+        guard let last = lastSeen[key], date >= last else { return true }
+        return date.timeIntervalSince(last) >= window
     }
 
     /// Marks `key` as seen without counting (e.g. apps already running when
