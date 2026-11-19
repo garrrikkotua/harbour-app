@@ -51,7 +51,7 @@ Push a version tag such as `v0.2.0` to publish. Manual dispatch accepts a versio
 
 ## Repeatable live smoke test
 
-On a test Mac with the built app, run `sudo python3 scripts/smoke-test.py` for a 12-second app-only session. Add `--include-websites` for a second 35-second session that blocks example.com and verifies live firewall rules. The script refuses to run over an existing Harbour session, uses a disposable copy of `/bin/sleep` as the blocked app, checks normal timer cleanup, and writes logs under `build/`. Website tests can interrupt existing network connections. This does not cover GUI authorization or reboot recovery.
+On a test Mac with the built app, run `sudo python3 scripts/smoke-test.py` for a 25-second app-only session. Add `--include-websites` for a second 60-second session that blocks example.com and verifies live firewall rules. Both sessions check attempt counting: the app open at block start is not counted and a relaunch counts once; TLS and HTTP connections to the sink count `example.com` once per burst and ignore unblocked hosts; the loopback alias is removed at expiry. Your real `stats.json` is backed up and restored. The script refuses to run over an existing Harbour session, uses a disposable copy of `/bin/sleep` as the blocked app, checks normal timer cleanup, and writes logs under `build/`. Website tests can interrupt existing network connections. This does not cover GUI authorization or reboot recovery.
 
 ## Manual acceptance checks
 
