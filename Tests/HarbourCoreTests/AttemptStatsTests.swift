@@ -141,12 +141,19 @@ final class AttemptStatsTests: XCTestCase {
     }
 
     func test_historyFileIsNamedByAccountUUID() {
-        let path = AttemptStats.filePath(forUID: getuid())
-        XCTAssertNotNil(path)
-        XCTAssertFalse(path!.contains("\(getuid())."), "UIDs are reused; the name must not be the UID")
+        XCTAssertEqual(AttemptStats.filePath(forAccountUUID: "33579dec-afc4-4c7e-8721-69cb8555a21c"),
+                       "/var/db/harbour/stats-33579DEC-AFC4-4C7E-8721-69CB8555A21C.json")
         XCTAssertNil(AttemptStats.filePath(forUID: 0))
         // No such account: the system's synthesized UUID is rejected.
         XCTAssertNil(AttemptStats.filePath(forUID: 98765))
+    }
+
+    func test_liveAccountResolvesToItsUUID() throws {
+        guard getuid() != 0, let id = AttemptStats.accountUUID(getuid()) else {
+            throw XCTSkip("Runner has no directory-service account")
+        }
+        XCTAssertEqual(AttemptStats.filePath(forUID: getuid()), AttemptStats.filePath(forAccountUUID: id))
+        XCTAssertFalse(AttemptStats.filePath(forUID: getuid())!.contains("stats-\(getuid())."))
     }
 
     // MARK: Debouncer

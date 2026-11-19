@@ -102,7 +102,11 @@ public struct AttemptStats: Codable, Equatable {
     /// nil when the UID has no real account (or is root).
     public static func filePath(forUID uid: UInt32) -> String? {
         guard uid != 0, let id = accountUUID(uid) else { return nil }
-        return "/var/db/harbour/stats-\(id).json"
+        return filePath(forAccountUUID: id)
+    }
+
+    public static func filePath(forAccountUUID id: String) -> String {
+        "/var/db/harbour/stats-\(id.uppercased()).json"
     }
 
     /// The account's GeneratedUID. Unknown UIDs get a synthesized

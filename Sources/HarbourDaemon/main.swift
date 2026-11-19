@@ -485,6 +485,11 @@ func applyPF(domains: [String]) {
 
     let (rc, out) = run("/sbin/pfctl", args, timeoutSec: 10)
     log("pfctl \(args.joined(separator: " ")) => rc=\(rc) out=\(out.trimmingCharacters(in: .whitespacesAndNewlines))")
+    if rc != 0 && sinkGuardWanted {
+        // Our rules may be gone (another firewall manager); don't keep
+        // routing names to the sink on a stale confirmation.
+        setSinkGuard(false)
+    }
     if rc == 0 {
         if sinkGuardWanted {
             // pfctl succeeding doesn't prove the rules apply (the main
@@ -670,24 +675,23 @@ func enforcementTargets(for paths: [String]) -> [(target: String, bundle: String
     }.filter { seen.insert($0.target).inserted }
 }
 
-/// Blocked bundle paths that have a process running right now.
-func runningBundles(targets: [(target: String, bundle: String)]) -> [String] {
-    guard !targets.isEmpty else { return [] }
-    var running = Set<String>()
-    for (_, procPath) in listProcesses() {
-        for (target, bundle) in targets where Safety.matchesApp(executable: procPath, bundlePath: target) {
-            running.insert(bundle)
-            break
+/// PIDs of `uid`'s processes inside the blocked bundles right now.
+func runningPIDs(targets: [(target: String, bundle: String)], uid: uid_t?) -> [pid_t] {
+    guard let uid, !targets.isEmpty else { return [] }
+    var pids: [pid_t] = []
+    for (pid, procPath) in listProcesses() where processOwnerUID(pid) == uid {
+        if targets.contains(where: { Safety.matchesApp(executable: procPath, bundlePath: $0.target) }) {
+            pids.append(pid)
         }
     }
-    return Array(running)
+    return pids
 }
 
 /// Returns the blocked bundle paths that had a process terminated, with the
 /// account each process belonged to.
 @discardableResult
-func killBlockedApps(targets: [(target: String, bundle: String)]) -> [(bundle: String, uid: uid_t)] {
-    var killed: [(bundle: String, uid: uid_t)] = []
+func killBlockedApps(targets: [(target: String, bundle: String)]) -> [(bundle: String, uid: uid_t, pid: pid_t)] {
+    var killed: [(bundle: String, uid: uid_t, pid: pid_t)] = []
     guard !targets.isEmpty else { return killed }
     let ownPID = getpid()
     for (pid, procPath) in listProcesses() {
@@ -706,7 +710,7 @@ func killBlockedApps(targets: [(target: String, bundle: String)]) -> [(bundle: S
                 // Not logged: the log would become a second, timestamped
                 // record of attempts outside the owner's history file.
                 if kill(pid, SIGKILL) == 0 {
-                    killed.append((bundle: bundle, uid: uid))
+                    killed.append((bundle: bundle, uid: uid, pid: pid))
                 }
                 break
             }
@@ -731,8 +735,10 @@ func loadState() -> BlockState? {
 func fullCleanup() {
     log("cleanup: removing hosts + pf rules + state")
     removeHosts()
-    removePF()
+    // Alias first: while a browser still holds the sink address, the PF
+    // guard must stay in place.
     stopAttemptTracking()
+    removePF()
     try? FileManager.default.removeItem(atPath: stateFile)
     try? FileManager.default.removeItem(atPath: plistPath)
     // The GUI owns its additions file and removes it after observing expiry.
@@ -760,8 +766,10 @@ func quickExitNoOp() -> Never {
 func liftNetworkRulesKeepingState() {
     log("termination: removing hosts + pf rules, keeping state so the block resumes at next launch")
     removeHosts()
-    removePF()
+    // Alias first: while a browser still holds the sink address, the PF
+    // guard must stay in place.
     stopAttemptTracking()
+    removePF()
 }
 
 /// Set once the block is running; nil during startup cleanup.
@@ -840,7 +848,7 @@ var killTargets = enforcementTargets(for: effectivePaths)
 let recorder = AttemptRecorder(sessionStart: state.startTime, ownerUID: state.ownerUID.map { uid_t($0) })
 attemptRecorder = recorder
 recorder.setBlockedDomains(effectiveDomains)
-recorder.suppressApps(runningBundles(targets: killTargets))
+recorder.excludePreexisting(runningPIDs(targets: killTargets, uid: recorder.ownerUIDValue))
 /// Starts the website sink once there is a website to block (an app-only
 /// block leaves networking alone until a site is added).
 var sinkAttempted = false
@@ -939,7 +947,8 @@ func reloadAdditionsIfChanged() -> Bool {
     }
     if effectivePaths.count != origPathCount {
         killTargets = enforcementTargets(for: effectivePaths)
-        recorder.suppressApps(runningBundles(targets: enforcementTargets(for: Array(effectivePaths[origPathCount...]))))
+        recorder.excludePreexisting(runningPIDs(targets: enforcementTargets(for: Array(effectivePaths[origPathCount...])),
+                                                uid: recorder.ownerUIDValue))
     }
     if effectiveDomains.count != origDomainCount {
         recorder.setBlockedDomains(effectiveDomains)
@@ -967,7 +976,7 @@ while Date() < state.endTime && !terminationRequested {
     // Every account's processes are closed, but only the block owner's
     // launches go into the owner's history.
     for kill in killBlockedApps(targets: killTargets) where kill.uid == recorder.ownerUIDValue {
-        recorder.recordApp(kill.bundle)
+        recorder.recordApp(kill.bundle, pid: kill.pid)
     }
     recorder.flush()
     tick += 1

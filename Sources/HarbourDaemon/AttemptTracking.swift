@@ -35,10 +35,16 @@ final class AttemptRecorder {
     /// The block owner, or nil when unknown (then nothing is recorded).
     var ownerUIDValue: uid_t? { ownerUID }
 
+    /// The owner's account UUID at startup. Every write re-checks that the UID
+    /// still maps to it, so a deleted account's reassigned UID never gains
+    /// access to the history.
+    private let ownerUUID: String?
+
     init(sessionStart: Date, ownerUID: uid_t?) {
         self.sessionStart = sessionStart
         self.ownerUID = ownerUID
-        path = ownerUID.flatMap { AttemptStats.filePath(forUID: $0) }
+        ownerUUID = ownerUID.flatMap { $0 == 0 ? nil : AttemptStats.accountUUID($0) }
+        path = ownerUUID.map(AttemptStats.filePath(forAccountUUID:))
         if path == nil { log("stats: block owner unknown; attempts are not saved") }
         // Pre-release builds kept one shared, world-readable file.
         unlink("/var/db/harbour/stats.json")
@@ -72,12 +78,13 @@ final class AttemptRecorder {
         lock.lock(); hostLookup = lookup; lock.unlock()
     }
 
-    /// Paths that must not count until their window passes: apps that were
-    /// already running when the block started or the app was added.
-    func suppressApps(_ paths: [String]) {
-        lock.lock(); defer { lock.unlock() }
-        let now = Date()
-        for p in paths { appBursts.suppress(p, at: now) }
+    /// The owner's processes that were already running when the block
+    /// started or their app was added. Closing them isn't an attempt, however
+    /// long setup takes; a later launch (a new PID) is.
+    private var preexistingPIDs = Set<pid_t>()
+
+    func excludePreexisting(_ pids: [pid_t]) {
+        lock.lock(); preexistingPIDs.formUnion(pids); lock.unlock()
     }
 
     /// A browser connected to the sink asking for `host`. `connectionOwner`
@@ -103,10 +110,17 @@ final class AttemptRecorder {
         lock.unlock()
     }
 
-    /// The kill loop terminated a process of the blocked bundle `path`.
-    func recordApp(_ path: String) {
+    /// The kill loop terminated the owner's process `pid` of the blocked
+    /// bundle `path`.
+    func recordApp(_ path: String, pid: pid_t) {
         lock.lock()
         let now = Date()
+        if preexistingPIDs.remove(pid) != nil {
+            // Its helpers die in the same sweep; don't count them either.
+            appBursts.suppress(path, at: now)
+            lock.unlock()
+            return
+        }
         guard appBursts.shouldCount(path, at: now) else { lock.unlock(); return }
         stats.record(.app, key: path, at: now, sessionStart: sessionStart)
         dirty = true
@@ -150,7 +164,12 @@ final class AttemptRecorder {
         }
         // Without the owner's read access the app couldn't show the history;
         // keep the previous file and retry rather than replace it.
-        guard let uid = ownerUID, let name = Self.userName(uid) else {
+        guard let uid = ownerUID, AttemptStats.accountUUID(uid) == ownerUUID, ownerUUID != nil else {
+            log("stats: the block owner's account changed; not saving")
+            unlink(tmp)
+            return false
+        }
+        guard let name = Self.userName(uid) else {
             log("stats: no account name for the block owner; not saving")
             unlink(tmp)
             return false
@@ -288,29 +307,52 @@ final class AttemptSink {
 
     static func aliasPresent() -> Bool { aliasState() ?? true }
 
+    /// Client port → owning UID for connections to the sink, from one lsof
+    /// scan. Connections of one page load share a snapshot: callers wait for
+    /// a scan in progress instead of each starting their own.
+    private static let ownersLock = NSLock()
+    private static var owners: [UInt16: uid_t] = [:]
+    private static var ownersTakenAt = Date.distantPast
+
     /// The account owning the client end of a loopback connection to the
-    /// sink from local port `clientPort`, via lsof (root sees every process).
-    /// nil when it can't be determined.
+    /// sink from local port `clientPort` (root sees every process). nil when
+    /// it can't be determined.
     static func connectionOwnerUID(clientPort: UInt16) -> uid_t? {
+        ownersLock.lock(); defer { ownersLock.unlock() }
+        // A connection accepted after the last scan isn't in it: rescan.
+        if owners[clientPort] == nil || Date().timeIntervalSince(ownersTakenAt) > 2 {
+            owners = scanOwners()
+            ownersTakenAt = Date()
+        }
+        // Root clients are known but never the owner.
+        return owners[clientPort].flatMap { $0 == 0 ? nil : $0 }
+    }
+
+    private static func scanOwners() -> [UInt16: uid_t] {
         let (rc, out) = run("/usr/sbin/lsof", ["-nP", "-iTCP@\(address)", "-sTCP:ESTABLISHED", "-F", "pun"],
                             timeoutSec: 2)
-        guard rc == 0 else { return nil }
+        guard rc == 0 else { return [:] }
         // -F output: p<pid>, u<uid>, then one n<local>-><remote> per socket.
         var uid: uid_t?
-        var owners = Set<uid_t>()
+        var found: [UInt16: Set<uid_t>] = [:]
+        let suffixes = ports.map { "->\(address):\($0)" }
         for line in out.split(separator: "\n") {
             switch line.first {
             case "p": uid = nil
             case "u": uid = uid_t(line.dropFirst())
             case "n":
-                let name = line.dropFirst()
-                if let u = uid, name.contains(":\(clientPort)->\(address):") { owners.insert(u) }
+                let name = String(line.dropFirst())
+                // Client ends only: "<src>:<port>->127.72.66.1:443".
+                guard let u = uid, suffixes.contains(where: name.hasSuffix),
+                      let arrow = name.range(of: "->"),
+                      let colon = name[..<arrow.lowerBound].lastIndex(of: ":"),
+                      let port = UInt16(name[name.index(after: colon)..<arrow.lowerBound]) else { continue }
+                found[port, default: []].insert(u)
             default: break
             }
         }
-        // Exactly one owner, and not the daemon's own (root) accepted end.
-        guard owners.count == 1, let owner = owners.first, owner != 0 else { return nil }
-        return owner
+        // Exactly one owner per port; ambiguous ports stay unattributed.
+        return found.compactMapValues { $0.count == 1 ? $0.first : nil }
     }
 
     /// Whether PF really rejects other ports on the sink address: listens on

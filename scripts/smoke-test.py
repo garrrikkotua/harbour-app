@@ -8,11 +8,11 @@ Both sessions check attempt counting; your real attempt history in
 /var/db/harbour/stats-<account UUID>.json is moved aside and restored afterwards.
 """
 import argparse
+import ctypes
 import json
 import os
 from pathlib import Path
 import plistlib
-import pwd
 import shutil
 import socket
 import ssl
@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE = Path('/var/db/harbour/state.json')
@@ -30,17 +31,24 @@ ANCHOR = Path('/etc/pf.anchors/org.harbour')
 TOKEN = Path('/etc/HarbourPFToken')
 
 
+def account_uuid(uid):
+    """The account's UUID exactly as the daemon resolves it (mbr_uid_to_uuid,
+    which also covers directory-service accounts), or None."""
+    libsystem = ctypes.CDLL('/usr/lib/libSystem.B.dylib')
+    buffer = (ctypes.c_ubyte * 16)()
+    if libsystem.mbr_uid_to_uuid(ctypes.c_uint32(uid), buffer) != 0:
+        return None
+    value = str(uuid.UUID(bytes=bytes(buffer))).upper()
+    return None if value.startswith('FFFFEEEE-DDDD-CCCC-BBBB-AAAA') else value
+
+
 def account_stats_path():
     """History of the account that ran sudo (the owner recorded in
-    state.json), named by its GeneratedUID like the daemon does."""
+    state.json), named by its account UUID like the daemon does. None when
+    it can't be resolved; main() refuses to run then."""
     uid = int(os.environ.get('SUDO_UID', 0))
-    if uid == 0:
-        return Path('/var/db/harbour/stats-unknown.json')
-    name = pwd.getpwuid(uid).pw_name
-    out = subprocess.run(['/usr/bin/dscl', '.', '-read', f'/Users/{name}', 'GeneratedUID'],
-                         capture_output=True, text=True, timeout=10).stdout
-    generated = out.split(':', 1)[-1].strip().upper()
-    return Path(f'/var/db/harbour/stats-{generated}.json')
+    value = account_uuid(uid) if uid else None
+    return Path(f'/var/db/harbour/stats-{value}.json') if value else None
 
 
 STATS = account_stats_path()
@@ -292,6 +300,8 @@ def main():
     if Path('/var/db/harbour/sink-alias').exists():
         parser.error('Stale /var/db/harbour/sink-alias marker found; remove it first.')
     test_user()
+    if STATS is None:
+        parser.error('Could not resolve your account UUID; refusing to touch attempt history.')
     # Keep the user's real attempt history out of the test and restore it
     # after. Moving the file keeps its owner, mode and read ACL intact.
     saved_stats = STATS.with_name(STATS.name + '.smoke-backup')
