@@ -122,6 +122,8 @@ public struct AttemptStats: Codable, Equatable {
     public static let retentionDays = 400
     /// Caps per-day keys; a misbehaving client can't grow the file without bound.
     public static let maxKeysPerDay = 500
+    /// Attempts on targets past the cap still count, under this key.
+    public static let overflowKey = "(other)"
 
     public static func dayKey(for date: Date, calendar: Calendar = storageCalendar) -> String {
         let c = calendar.dateComponents([.year, .month, .day], from: date)
@@ -135,18 +137,22 @@ public struct AttemptStats: Codable, Equatable {
         beginSession(start)
         let day = Self.dayKey(for: date, calendar: calendar)
         var counts = days[day] ?? Counts()
+        // Past the cap a new target is folded into `overflowKey`, so totals
+        // still include every attempt while the file stays bounded.
+        func slot(_ existing: [String: Int]) -> String {
+            existing[key] != nil || existing.count < Self.maxKeysPerDay ? key : Self.overflowKey
+        }
         switch kind {
         case .site:
-            guard counts.sites[key] != nil || counts.sites.count < Self.maxKeysPerDay else { return }
-            counts.sites[key, default: 0] += 1
-            session.sites[key, default: 0] += 1
-            lifetimeTotal += 1
+            let k = slot(counts.sites)
+            counts.sites[k, default: 0] += 1
+            session.sites[slot(session.sites), default: 0] += 1
         case .app:
-            guard counts.apps[key] != nil || counts.apps.count < Self.maxKeysPerDay else { return }
-            counts.apps[key, default: 0] += 1
-            session.apps[key, default: 0] += 1
-            lifetimeTotal += 1
+            let k = slot(counts.apps)
+            counts.apps[k, default: 0] += 1
+            session.apps[slot(session.apps), default: 0] += 1
         }
+        lifetimeTotal += 1
         days[day] = counts
     }
 

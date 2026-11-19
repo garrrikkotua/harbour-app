@@ -164,6 +164,7 @@ struct StatsView: View {
         let count: Int
         var id: String { (kind == .site ? "site:" : "app:") + key }
         var name: String {
+            if key == AttemptStats.overflowKey { return kind == .site ? "Other websites" : "Other apps" }
             switch kind {
             case .site: return key
             case .app: return (key as NSString).lastPathComponent.replacingOccurrences(of: ".app", with: "")
@@ -228,6 +229,10 @@ struct StatsView: View {
             HStack(spacing: 10) {
                 Group {
                     switch target.kind {
+                    case _ where target.key == AttemptStats.overflowKey:
+                        Image(systemName: "ellipsis.circle")
+                            .resizable()
+                            .foregroundStyle(Theme.textTertiary)
                     case .site:
                         // Cache only: history must not reach the favicon service.
                         FaviconView(domain: target.key, size: 16, allowsNetwork: false)

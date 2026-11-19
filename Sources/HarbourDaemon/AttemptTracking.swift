@@ -28,32 +28,53 @@ final class AttemptRecorder {
     /// The account that started the block: whose history this is, and the
     /// only one granted read access.
     private let ownerUID: uid_t?
-    /// nil when the owner is unknown (a state from an older build): counts
-    /// then stay in memory rather than landing in someone else's history.
+    /// That account's UUID: recorded by the app at block start (older states:
+    /// resolved now). Names the history file and its read ACL.
+    private let ownerUUID: String?
+    /// nil when the owner is unknown: counts then stay in memory rather than
+    /// landing in someone else's history.
     private let path: String?
 
-    /// The block owner, or nil when unknown (then nothing is recorded).
+    /// The block owner's UID as stated (callers filter by it); recording
+    /// itself also requires `verifiedOwner()`.
     var ownerUIDValue: uid_t? { ownerUID }
 
-    /// The owner's account UUID at startup. Every write re-checks that the UID
-    /// still maps to it, so a deleted account's reassigned UID never gains
-    /// access to the history.
-    private let ownerUUID: String?
+    private enum Verification { case verified, mismatch, pending(lastTry: UInt64) }
+    private let verifyLock = NSLock()
+    private var verification: Verification = .pending(lastTry: 0)
 
-    /// `ownerUUID` is the account UUID the app recorded when the block
-    /// started. If the UID now maps to a different account (deleted and
-    /// reassigned before a resume), nothing is attributed or saved.
+    /// The owner's UID once it's confirmed to still belong to `ownerUUID`. A
+    /// different account (UID deleted and reassigned) disables recording for
+    /// good; an inconclusive lookup (directory unavailable at resume) is
+    /// retried every 30 s, with nothing recorded meanwhile.
+    func verifiedOwner() -> uid_t? {
+        guard let uid = ownerUID, let expected = ownerUUID else { return nil }
+        verifyLock.lock(); defer { verifyLock.unlock() }
+        switch verification {
+        case .verified: return uid
+        case .mismatch: return nil
+        case .pending(let lastTry):
+            let now = DispatchTime.now().uptimeNanoseconds
+            guard lastTry == 0 || now - lastTry >= 30_000_000_000 else { return nil }
+            guard let current = AttemptStats.accountUUID(uid) else {
+                verification = .pending(lastTry: now)
+                log("stats: can't resolve the block owner's account yet; will retry")
+                return nil
+            }
+            if current.uppercased() == expected.uppercased() {
+                verification = .verified
+                return uid
+            }
+            verification = .mismatch
+            log("stats: the block owner's account changed since the block started; attempts are not saved")
+            return nil
+        }
+    }
+
     init(sessionStart: Date, ownerUID: uid_t?, ownerUUID recorded: String?) {
         self.sessionStart = sessionStart
-        let current = ownerUID.flatMap { $0 == 0 ? nil : AttemptStats.accountUUID($0) }
-        if let recorded, current?.uppercased() != recorded.uppercased() {
-            log("stats: the block owner's account changed since the block started; attempts are not saved")
-            self.ownerUID = nil
-            ownerUUID = nil
-        } else {
-            self.ownerUID = ownerUID
-            ownerUUID = current
-        }
+        self.ownerUID = ownerUID.flatMap { $0 == 0 ? nil : $0 }
+        ownerUUID = recorded?.uppercased() ?? self.ownerUID.flatMap { AttemptStats.accountUUID($0) }
         path = ownerUUID.map(AttemptStats.filePath(forAccountUUID:))
         if path == nil { log("stats: block owner unknown; attempts are not saved") }
         // Pre-release builds kept one shared, world-readable file.
@@ -102,7 +123,7 @@ final class AttemptRecorder {
     /// every user on the Mac, but only the block owner's attempts belong in
     /// the owner's history. When attribution fails nothing is counted.
     func recordHost(_ host: String, connectionOwner: () -> uid_t?) {
-        guard let owner = ownerUID else { return }
+        guard let owner = verifiedOwner() else { return }
         lock.lock()
         guard let domain = BlockedHostMatcher.match(host: host, in: hostLookup),
               siteBursts.wouldCount(domain, at: Date()) else { lock.unlock(); return }
@@ -123,6 +144,7 @@ final class AttemptRecorder {
     /// The kill loop terminated the owner's process `pid` of the blocked
     /// bundle `path`.
     func recordApp(_ path: String, pid: pid_t) {
+        guard verifiedOwner() != nil else { return }
         lock.lock()
         let now = Date()
         // Only that process is excluded (its helpers were running too, so
@@ -197,19 +219,15 @@ final class AttemptRecorder {
         }
         // Without the owner's read access the app couldn't show the history;
         // keep the previous file and retry rather than replace it.
-        guard let uid = ownerUID, AttemptStats.accountUUID(uid) == ownerUUID, ownerUUID != nil else {
-            log("stats: the block owner's account changed; not saving")
+        // Without the owner's read access the app couldn't show the history;
+        // keep the previous file and retry rather than replace it.
+        guard verifiedOwner() != nil, let uuid = ownerUUID.flatMap(UUID.init(uuidString:)) else {
+            log("stats: block owner not verified; not saving")
             unlink(tmp)
             return false
         }
-        guard let name = Self.userName(uid) else {
-            log("stats: no account name for the block owner; not saving")
-            unlink(tmp)
-            return false
-        }
-        let (rc, out) = run("/bin/chmod", ["+a", "user:\(name) allow read", tmp], timeoutSec: 3)
-        guard rc == 0 else {
-            log("stats: could not grant the owner read access: \(out)")
+        guard Self.grantRead(to: uuid, path: tmp) else {
+            log("stats: could not grant the owner read access (errno \(errno))")
             unlink(tmp)
             return false
         }
@@ -221,13 +239,25 @@ final class AttemptRecorder {
         return true
     }
 
-    private static func userName(_ uid: uid_t) -> String? {
-        guard let pw = getpwuid(uid), let name = pw.pointee.pw_name else { return nil }
-        let value = String(cString: name)
-        // Only plain account names reach chmod's ACL syntax.
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
-        guard !value.isEmpty, value.unicodeScalars.allSatisfy(allowed.contains) else { return nil }
-        return value
+    /// Adds a read-only ACL entry for the account `uuid` (by UUID, so any
+    /// directory account name works).
+    private static func grantRead(to uuid: UUID, path: String) -> Bool {
+        var acl: acl_t? = acl_init(1)
+        guard acl != nil else { return false }
+        defer { acl_free(UnsafeMutableRawPointer(acl)) }
+        var entry: acl_entry_t?
+        guard acl_create_entry(&acl, &entry) == 0, let entry else { return false }
+        guard acl_set_tag_type(entry, ACL_EXTENDED_ALLOW) == 0 else { return false }
+        var bytes = uuid.uuid
+        guard withUnsafePointer(to: &bytes, { acl_set_qualifier(entry, $0) }) == 0 else { return false }
+        var permset: acl_permset_t?
+        guard acl_get_permset(entry, &permset) == 0, let permset else { return false }
+        acl_clear_perms(permset)
+        for perm in [ACL_READ_DATA, ACL_READ_ATTRIBUTES, ACL_READ_EXTATTRIBUTES, ACL_READ_SECURITY] {
+            acl_add_perm(permset, perm)
+        }
+        guard acl_set_permset(entry, permset) == 0 else { return false }
+        return acl_set_file(path, ACL_TYPE_EXTENDED, acl) == 0
     }
 }
 
@@ -257,7 +287,9 @@ final class AttemptSink {
         let clientAddress: String
         let clientPort: UInt16
         let serverPort: UInt16
-        let acceptedAt: Date
+        /// Monotonic (uptime) nanoseconds: wall-clock changes can't make an
+        /// older snapshot look newer.
+        let acceptedAt: UInt64
         /// lsof's spelling of the client end: "<ip>:<port>-><sink>:<port>".
         var lsofName: String { "\(clientAddress):\(clientPort)->\(AttemptSink.address):\(serverPort)" }
     }
@@ -370,7 +402,7 @@ final class AttemptSink {
     /// wait for a scan in progress instead of each starting their own.
     private static let ownersLock = NSLock()
     private static var owners: [String: uid_t] = [:]
-    private static var ownersTakenAt = Date.distantPast
+    private static var ownersTakenAt: UInt64 = 0
 
     /// The account owning the client end of `connection`, or nil when it
     /// can't be determined. Only a snapshot taken after the connection was
@@ -382,7 +414,7 @@ final class AttemptSink {
         Self.ownersLock.lock(); defer { Self.ownersLock.unlock() }
         if Self.ownersTakenAt <= connection.acceptedAt {
             guard !isStopped else { return nil }
-            Self.ownersTakenAt = Date()
+            Self.ownersTakenAt = DispatchTime.now().uptimeNanoseconds
             Self.owners = Self.scanOwners()
         }
         // Root clients are known but never the owner.
@@ -525,7 +557,7 @@ final class AttemptSink {
                 handle(client, Connection(clientAddress: String(cString: ip),
                                           clientPort: UInt16(bigEndian: peer.sin_port),
                                           serverPort: ports[p.fd] ?? 0,
-                                          acceptedAt: Date()))
+                                          acceptedAt: DispatchTime.now().uptimeNanoseconds))
             }
         }
     }

@@ -73,7 +73,12 @@ final class AttemptStatsTests: XCTestCase {
         for i in 0..<(AttemptStats.maxKeysPerDay + 10) {
             stats.record(.site, key: "s\(i).com", at: at, sessionStart: start, calendar: calendar)
         }
-        XCTAssertEqual(stats.days["2026-11-19"]?.sites.count, AttemptStats.maxKeysPerDay)
+        // Bounded keys, but every attempt still counts (10 folded into "other").
+        XCTAssertEqual(stats.days["2026-11-19"]?.sites.count, AttemptStats.maxKeysPerDay + 1)
+        XCTAssertEqual(stats.days["2026-11-19"]?.sites[AttemptStats.overflowKey], 10)
+        XCTAssertEqual(stats.days["2026-11-19"]?.total, AttemptStats.maxKeysPerDay + 10)
+        XCTAssertEqual(stats.session.total, AttemptStats.maxKeysPerDay + 10)
+        XCTAssertEqual(stats.lifetimeTotal, AttemptStats.maxKeysPerDay + 10)
     }
 
     func test_codableRoundTrip() throws {

@@ -44,5 +44,7 @@
     <true/>
     <key>SUVerifyUpdateBeforeExtraction</key>
     <true/>
+    <key>SUSignedFeedFailureExpirationInterval</key>
+    <integer>0</integer>
 </dict>
 </plist>
