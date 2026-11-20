@@ -5,6 +5,7 @@ import AppKit
 struct HarbourApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var manager = BlockManager()
+    @StateObject private var updater = AppUpdater()
     @AppStorage("harbour.didOnboard") private var didOnboard: Bool = false
     /// HARBOUR_DEMO_ONBOARDING=1 shows onboarding without touching the stored
     /// flag; finishing it only dismisses it for this launch.
@@ -51,6 +52,7 @@ struct HarbourApp: App {
                 }
             }
             .frame(width: 520)
+            .tracksWindowVisibility()
             .background(WindowChromeConfigurator())
         }
         // No title bar strip: the night intro, onboarding sky and active
@@ -58,17 +60,15 @@ struct HarbourApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .commands {
-            CommandGroup(after: .appInfo) {
-                Button("Check for Updates…") {
-                    NSWorkspace.shared.open(URL(string: "https://github.com/garrrikkotua/harbour-app/releases/latest")!)
-                }
-            }
+            UpdateCommands(updater: updater)
         }
 
         // Status item: a small lighthouse that lights up (with a countdown)
         // while a block is running.
         MenuBarExtra {
+            // The panel's view stays alive after it closes; pause its sky.
             MenuBarExtraView(manager: manager)
+                .tracksWindowVisibility()
         } label: {
             MenuBarLabel(manager: manager)
         }

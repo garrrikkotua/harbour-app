@@ -545,7 +545,7 @@ footer a:hover { color: var(--parchment-warm); }
         <p class="section-lede">Harbour Control changes system settings, so you should be able to see exactly what it does. It's a small Swift codebase, MIT licensed, built on ideas from <a href="https://github.com/SelfControlApp/selfcontrol">SelfControl</a>.</p>
       </div>
       <div class="hood">
-        <div class="hood-item reveal"><code>/etc/hosts</code><h3>Name-level blocking</h3><p>Blocked domains and their <code style="margin:0;padding:1px 6px;font-size:11px">www</code> variants are pointed nowhere, inside clearly marked lines that get removed when the block ends.</p></div>
+        <div class="hood-item reveal"><code>/etc/hosts</code><h3>Name-level blocking</h3><p>Blocked domains, their <code style="margin:0;padding:1px 6px;font-size:11px">www</code> and mobile variants, and the content hosts of well-known sites are pointed nowhere, inside clearly marked lines that get removed when the block ends.</p></div>
         <div class="hood-item reveal"><code>pf firewall</code><h3>IP-level rules</h3><p>Resolved addresses are blocked in a dedicated packet-filter anchor and refreshed every five minutes. Shared hosting like Cloudflare or Vercel is skipped, so one blocked site never takes its neighbours down. Other firewall rules on your Mac are left alone.</p></div>
         <div class="hood-item reveal"><code>launchd daemon</code><h3>Enforcement that outlives the app</h3><p>A small privileged helper holds the timer, restores the block after a reboot, and removes every change it made when time runs out.</p></div>
         <div class="hood-item reveal"><code>Developer ID</code><h3>Signed &amp; notarized</h3><p>Each release is signed with Developer ID, notarized by Apple and published with SHA-256 checksums. It opens like any other Mac app, with no Gatekeeper workarounds.</p></div>
@@ -566,7 +566,7 @@ footer a:hover { color: var(--parchment-warm); }
         <details><summary>Why does it need my admin password?</summary><p>Blocking every browser means editing <code>/etc/hosts</code>, adding firewall rules and installing a small background helper, and all of these need administrator rights. The password goes to macOS's own authorization prompt. Harbour Control never sees or stores it.</p></details>
         <details><summary>Will blocked apps lose my unsaved work?</summary><p>Blocked apps are closed about once a second while a session runs, so save your work in them before you start. System recovery tools are never blocked.</p></details>
         <details><summary>Which Macs does it support?</summary><p>macOS 13 Ventura or later, on both Apple Silicon and Intel. The download is a single universal app.</p></details>
-        <details><summary>How do I update or uninstall?</summary><p>Choose <em>Harbour Control → Check for Updates…</em> to open the latest release, then replace the app when no block is running. To uninstall, wait until the current block ends and move the app to the Trash.</p></details>
+        <details><summary>How do I update or uninstall?</summary><p>From version 0.4.0 the app updates itself: it checks once a day and offers each new signed release, or installs it automatically if you turn that on. A running block is never affected. To uninstall, wait until the current block ends and move the app to the Trash.</p></details>
       </div>
     </div>
   </section>

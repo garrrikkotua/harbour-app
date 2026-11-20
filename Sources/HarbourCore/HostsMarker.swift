@@ -41,21 +41,41 @@ public enum HostsMarker {
         return result.joined(separator: "\n") + "\n"
     }
 
-    /// Build an /etc/hosts block section for a list of domains, using the
-    /// 0.0.0.0 / :: null-route sinks (more browser-friendly than 127.0.0.1).
-    /// Each domain is emitted as both its bare form and `www.` variant.
+    /// Build an /etc/hosts block section for a list of domains. IPv4 goes to
+    /// `ipv4Sink`: the 0.0.0.0 null route, or the daemon's loopback listener
+    /// that counts attempts. IPv6 always goes to the `::` null route, so
+    /// browsers fall back to IPv4 immediately. Each domain is emitted as both
+    /// its bare form and `www.` variant.
     public static func buildHostsBlock(
         domains: [String],
         start: String,
-        end: String
+        end: String,
+        ipv4Sink: String = "0.0.0.0"
     ) -> String {
         var out = "\n\(start)\n"
         for d in domains where DomainValidation.isSafeDomain(d) {
             let stripped = d.hasPrefix("www.") ? String(d.dropFirst(4)) : d
-            out += "0.0.0.0\t\(stripped)\n"
-            out += "0.0.0.0\twww.\(stripped)\n"
+            out += "\(ipv4Sink)\t\(stripped)\n"
+            out += "\(ipv4Sink)\twww.\(stripped)\n"
             out += "::\t\(stripped)\n"
             out += "::\twww.\(stripped)\n"
+        }
+        out += "\(end)\n"
+        return out
+    }
+
+    /// Same block for an exact list of hostnames (see `RelatedDomains`): each
+    /// name is written as given, with no `www.` variant added.
+    public static func buildHostsBlock(
+        hostnames: [String],
+        start: String,
+        end: String,
+        ipv4Sink: String = "0.0.0.0"
+    ) -> String {
+        var out = "\n\(start)\n"
+        for name in hostnames where DomainValidation.isSafeDomain(name) {
+            out += "\(ipv4Sink)\t\(name)\n"
+            out += "::\t\(name)\n"
         }
         out += "\(end)\n"
         return out

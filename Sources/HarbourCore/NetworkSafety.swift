@@ -64,4 +64,19 @@ public enum NetworkSafety {
         }
         return true
     }
+
+    /// Whether a pf.conf skips filtering on loopback (`set skip on lo0`, or
+    /// lo inside a `{ … }` list), ignoring comments. PF rules for the
+    /// counting sink's loopback alias would then have no effect.
+    public static func pfConfSkipsLoopback(_ conf: String) -> Bool {
+        conf.split(separator: "\n").contains { line in
+            let code = line.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
+            let tokens = code.replacingOccurrences(of: "{", with: " ").replacingOccurrences(of: "}", with: " ")
+                .split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "," })
+            guard tokens.count >= 4, tokens[0] == "set", tokens[1] == "skip", tokens[2] == "on" else { return false }
+            return tokens.dropFirst(3).contains { t in
+                t == "lo" || (t.hasPrefix("lo") && t.dropFirst(2).allSatisfy(\.isNumber))
+            }
+        }
+    }
 }

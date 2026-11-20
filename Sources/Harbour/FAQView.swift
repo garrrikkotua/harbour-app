@@ -58,6 +58,22 @@ struct FAQView: View {
                 The lighthouse in your menu bar shows the time left; click it for the full status. The main window shows the same countdown with the end time.
                 """
             ),
+            FAQItem(
+                symbol: "chart.bar",
+                q: "What counts as an attempt?",
+                a: """
+                Each time you try to open a blocked website or app during a block. A page load or an app relaunch within a few seconds counts once. Apps that were already open when the block started are closed without counting.
+
+                See your history with the chart button. Browsers using their own secure DNS, or a VPN, can skip the count; the block still applies.
+                """
+            ),
+            FAQItem(
+                symbol: "arrow.down.circle",
+                q: "How do updates work?",
+                a: """
+                Harbour Control checks for a new signed release once a day and offers to install it. Turn on **Install Updates Automatically** in the Harbour Control menu to skip the prompt. Updating never ends or changes a running block.
+                """
+            ),
         ]),
         FAQGroup(title: "What gets blocked", items: [
             FAQItem(
@@ -66,7 +82,7 @@ struct FAQView: View {
                 a: """
                 Two layers:
 
-                **/etc/hosts** points each blocked domain and its `www.` version at 0.0.0.0, so it can't be looked up.
+                **/etc/hosts** points each blocked domain at a local address, along with its `www.`, `m.` and `mobile.` versions and, for well-known sites, the hosts they load content from (X's `twimg.com` images, for example). Those names can't be looked up.
 
                 **The macOS firewall (pf)** drops traffic to the addresses those domains resolve to. Addresses are refreshed every 5 minutes to keep up with sites that rotate them. Well-known secure DNS (DNS-over-HTTPS) endpoints are blocked too, so browsers can't quietly route around the list.
                 """
@@ -75,7 +91,7 @@ struct FAQView: View {
                 symbol: "point.3.connected.trianglepath.dotted",
                 q: "Are subdomains blocked?",
                 a: """
-                `example.com` also covers `www.example.com`, but not other subdomains like `mail.example.com` or `m.example.com`. Add those as separate entries. The presets already include the usual extra hosts (YouTube's video servers, for example).
+                `example.com` also covers `www.example.com`, `m.example.com` and `mobile.example.com`, but not other subdomains like `mail.example.com`. Add those as separate entries. Well-known sites such as X, YouTube, Reddit and Instagram also cover the hosts they load posts, images and video from. Shared CDNs and link shorteners like `t.co` are never added, because other sites use them too.
                 """
             ),
             FAQItem(
@@ -95,7 +111,7 @@ struct FAQView: View {
 
                 **The site moved to new addresses.** Harbour Control catches up within 5 minutes.
 
-                **Your browser cached it.** Close the tab or restart the browser.
+                **Your browser kept an offline copy.** Some sites, X for example, store their app in the browser, so the page still opens from that copy with the posts you already saw. Nothing new loads; a hard reload (⇧⌘R) shows the block.
                 """
             ),
         ]),
@@ -126,11 +142,13 @@ struct FAQView: View {
 
                 Active block: `/var/db/harbour/state.json` (removed when the timer ends)
 
+                Attempt stats: `/var/db/harbour/stats-<your account ID>.json` (kept between blocks, readable only by you, stays on this Mac)
+
                 Daemon: `/Library/PrivilegedHelperTools/com.harbour.daemon` and `/Library/LaunchDaemons/com.harbour.daemon.plist`
 
-                Log: `/var/log/harbour-daemon.log`
+                Log: `/var/log/harbour-daemon.log` (readable by administrators only, with sudo)
 
-                There are no analytics. Website icons come from Google's favicon service, which sees the hostname.
+                There are no analytics. Website icons come from Google's favicon service, which sees the hostname. The update check downloads a small file from GitHub once a day.
                 """
             ),
         ]),

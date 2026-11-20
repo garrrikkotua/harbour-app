@@ -8,6 +8,9 @@ import AppKit
 struct FaviconView: View {
     let domain: String
     var size: CGFloat = 20
+    /// False: only icons already fetched for the blocklist are shown, never a
+    /// new request. Attempt history stays on this Mac.
+    var allowsNetwork = true
 
     @State private var image: NSImage?
     @State private var failed = false
@@ -84,7 +87,7 @@ struct FaviconView: View {
             image = cached
             return
         }
-        if FaviconCache.shared.hasFailed(domain) {
+        if FaviconCache.shared.hasFailed(domain) || !allowsNetwork {
             failed = true
             return
         }

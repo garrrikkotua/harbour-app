@@ -7,6 +7,11 @@ let package = Package(
     products: [
         .library(name: "HarbourCore", targets: ["HarbourCore"]),
     ],
+    dependencies: [
+        // In-app updates (EdDSA-signed appcast). Pinned to a minor line so a
+        // release never picks up an untested Sparkle by accident.
+        .package(url: "https://github.com/sparkle-project/Sparkle", .upToNextMinor(from: "2.9.6")),
+    ],
     targets: [
         // Pure-logic library shared between GUI, daemon, and tests.
         .target(
@@ -15,7 +20,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "Harbour",
-            dependencies: ["HarbourCore"],
+            dependencies: [
+                "HarbourCore",
+                .product(name: "Sparkle", package: "Sparkle"),
+            ],
             path: "Sources/Harbour"
         ),
         .executableTarget(

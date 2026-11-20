@@ -35,6 +35,7 @@ struct SetupView: View {
     @State private var newDomain = ""
     @State private var showAppPicker = false
     @State private var showFAQ = false
+    @State private var showStats = false
     @State private var showConfirm = false
     @State private var errorMessage: String?
     @State private var startHovered = false
@@ -45,7 +46,8 @@ struct SetupView: View {
                 VStack(spacing: 12) {
                     Hero(
                         lampLit: startHovered && canStart,
-                        onHelp: { showFAQ = true }
+                        onHelp: { showFAQ = true },
+                        onStats: { showStats = true }
                     )
 
                     DomainSection(manager: manager, newDomain: $newDomain)
@@ -73,6 +75,7 @@ struct SetupView: View {
             case .confirm: showConfirm = canStart
             case .faq: showFAQ = true
             case .apps: showAppPicker = true
+            case .stats: showStats = true
             case nil: break
             }
         }
@@ -91,6 +94,9 @@ struct SetupView: View {
         }
         .sheet(isPresented: $showFAQ) {
             FAQView(onClose: { showFAQ = false })
+        }
+        .sheet(isPresented: $showStats) {
+            StatsView(manager: manager, onClose: { showStats = false })
         }
         .sheet(isPresented: $showConfirm) {
             ConfirmView(
@@ -188,6 +194,7 @@ struct SetupView: View {
 private struct Hero: View {
     let lampLit: Bool
     let onHelp: () -> Void
+    let onStats: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -228,10 +235,15 @@ private struct Hero: View {
 
             Spacer(minLength: 8)
 
-            CircleIconButton(symbol: "questionmark", tint: Theme.textSecondary,
-                             hoverFill: Theme.navySoft, help: "How Harbour Control works",
-                             action: onHelp)
-                .frame(maxHeight: .infinity, alignment: .top)
+            VStack(spacing: 6) {
+                CircleIconButton(symbol: "questionmark", tint: Theme.textSecondary,
+                                 hoverFill: Theme.navySoft, help: "How Harbour Control works",
+                                 action: onHelp)
+                CircleIconButton(symbol: "chart.bar", tint: Theme.textSecondary,
+                                 hoverFill: Theme.navySoft, help: "Attempts stopped",
+                                 action: onStats)
+            }
+            .frame(maxHeight: .infinity, alignment: .top)
         }
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -1257,10 +1269,11 @@ struct ActiveView: View {
     @ObservedObject var manager: BlockManager
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showFAQ = false
+    @State private var showStats = false
     @State private var showAppPicker = false
     @State private var expanded = false
     @State private var newDomain = ""
-    @State private var windowVisible = true
+    @Environment(\.windowVisible) private var windowVisible
     /// When the lamp was lit (ignition), nil if the session was already running.
     @State private var ignitedAt: Date?
     @State private var revealed: Bool
@@ -1339,6 +1352,9 @@ struct ActiveView: View {
                                 .font(Theme.sans(size: 12))
                                 .foregroundStyle(Theme.nightTertiary)
                                 .padding(.top, 8)
+
+                            AttemptsBadge(count: manager.sessionAttempts, action: { showStats = true })
+                                .padding(.top, 14)
                         }
 
                         BlocklistSection(
@@ -1368,8 +1384,11 @@ struct ActiveView: View {
             }
             }
 
-            HStack {
+            HStack(spacing: 6) {
                 Spacer()
+                CircleIconButton(symbol: "chart.bar", tint: Color.white.opacity(0.75),
+                                 hoverFill: Color.white.opacity(0.1), help: "Attempts stopped",
+                                 action: { showStats = true })
                 CircleIconButton(symbol: "questionmark", tint: Color.white.opacity(0.75),
                                  hoverFill: Color.white.opacity(0.1), help: "How Harbour Control works",
                                  action: { showFAQ = true })
@@ -1378,7 +1397,6 @@ struct ActiveView: View {
         }
         .frame(width: 520, height: 640)
         .environment(\.colorScheme, .dark)
-        .trackingWindowVisibility($windowVisible)
         .onAppear {
             guard !revealed else { return }
             // Let the lamp catch first, then bring the numbers up.
@@ -1388,8 +1406,12 @@ struct ActiveView: View {
             // Demo/QA only (see DemoMode).
             if DemoMode.sheet == .faq { showFAQ = true }
             if DemoMode.sheet == .apps { showAppPicker = true }
+            if DemoMode.sheet == .stats { showStats = true }
         }
         .sheet(isPresented: $showFAQ) { FAQView(onClose: { showFAQ = false }) }
+        .sheet(isPresented: $showStats) {
+            StatsView(manager: manager, onClose: { showStats = false })
+        }
         .sheet(isPresented: $showAppPicker) {
             AppPickerView(
                 alreadyAdded: Set(manager.effectiveApps.map(\.path)),
@@ -1426,6 +1448,7 @@ struct ActiveView: View {
 private struct Countdown: View {
     let seconds: Int
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.windowVisible) private var windowVisible
 
     var body: some View {
         let h = seconds / 3600, m = (seconds % 3600) / 60, s = seconds % 60
@@ -1436,7 +1459,9 @@ private struct Countdown: View {
             .foregroundStyle(Theme.nightText)
             .shadow(color: Theme.beam.opacity(0.18), radius: 14)
             .numericTransition(countsDown: true)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: seconds)
+            // The digit roll blurs a 56 pt shadowed string every second; skip it
+            // while the window is hidden.
+            .animation(reduceMotion || !windowVisible ? nil : .easeInOut(duration: 0.3), value: seconds)
             .accessibilityLabel("\(h) hours \(m) minutes \(s) seconds left")
     }
 }
@@ -1686,6 +1711,7 @@ private struct AddButtonStyle: ButtonStyle {
 
 /// Amber → lamp-glow progress with a rare glint and a glowing head.
 private struct ProgressTrack: View {
+    @Environment(\.windowVisible) private var windowVisible
     let progress: Double
     var animated: Bool = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1702,7 +1728,7 @@ private struct ProgressTrack: View {
                     .frame(width: width)
                     .overlay(alignment: .leading) {
                         if live {
-                            TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+                            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !windowVisible)) { context in
                                 // A faint 2.8 s glint every 12 s; resting the rest of
                                 // the time so it never reads as a loading bar.
                                 let cycle = context.date.timeIntervalSinceReferenceDate
@@ -1727,7 +1753,9 @@ private struct ProgressTrack: View {
                     .shadow(color: Theme.beam.opacity(0.9), radius: 5)
                     .offset(x: width - 7)
             }
-            .animation(.linear(duration: 0.9), value: progress)
+            // Ticks every second; skipped while hidden, since re-rendering the
+            // shadowed bar for 0.9 s of every second kept the CPU busy.
+            .animation(windowVisible ? .linear(duration: 0.9) : nil, value: progress)
         }
         .accessibilityElement()
         .accessibilityLabel("Progress")
@@ -1755,5 +1783,40 @@ private struct ActiveStat: View {
         }
         .foregroundStyle(Color.white.opacity(0.78))
         .animation(.easeOut(duration: 0.25), value: count)
+    }
+}
+
+/// "3 attempts stopped" under the countdown; opens the stats sheet.
+private struct AttemptsBadge: View {
+    let count: Int
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "hand.raised.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Theme.beam)
+                (Text("\(count)")
+                    .font(Theme.sans(size: 12.5, weight: .semibold))
+                    .monospacedDigit()
+                 + Text(count == 1 ? " attempt stopped" : " attempts stopped")
+                    .font(Theme.sans(size: 12.5)))
+                    .numericTransition()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundStyle(Theme.nightTertiary)
+            }
+            .foregroundStyle(Color.white.opacity(0.82))
+            .padding(.horizontal, 12)
+            .frame(height: 28)
+            .background(Capsule().fill(Color.white.opacity(hovering ? 0.12 : 0.07)))
+            .overlay(Capsule().strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.25), value: count)
+        .help("See your attempt history")
     }
 }

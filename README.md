@@ -17,7 +17,7 @@ A free, open-source macOS focus app by Igor Kotua. Block distracting websites an
 
 Releases from v0.2.0 onward are Developer ID-signed and notarized by Apple. v0.1.0 was unsigned.
 
-Use **Harbour Control → Check for Updates…** to open the latest GitHub release. Updates are installed manually when no block is active. Checksums are included with new releases in `SHA256SUMS.txt`.
+From 0.4.0, Harbour Control updates itself. It checks GitHub once a day and offers each new signed release; **Harbour Control → Check for Updates…** checks now, and **Install Updates Automatically** installs them without asking. Updates are verified with an EdDSA signature and Apple notarization. An update never ends or changes a running block. Earlier versions update manually from the latest release. Checksums are included with new releases in `SHA256SUMS.txt`.
 
 ## Features
 
@@ -27,20 +27,25 @@ Use **Harbour Control → Check for Updates…** to open the latest GitHub relea
 - Background enforcement that resumes after reboot.
 - Add more websites and apps during a session; accepted additions persist across daemon restarts.
 - App-only sessions leave network configuration alone.
+- Attempt stats: every time you try to open a blocked website or app is counted, per day and per target, with a 14-day chart and your most-tried distractions.
 
 ## What to expect
 
-Website blocking covers the domain you enter and its `www` variant. Add other subdomains explicitly or choose a preset. IP rules update every five minutes. Addresses on shared hosting and CDNs (Cloudflare, Fastly, Vercel, CloudFront, AWS Global Accelerator) are never IP-blocked, because they also serve unrelated sites; those sites are blocked by name only. Refresh the list with `scripts/update-shared-hosting.py`. Secure DNS endpoints are blocked during website sessions, while ordinary DNS on port 53 remains available.
+Website blocking covers the domain you enter with its `www`, `m` and `mobile` variants. Well-known sites (X, YouTube, Reddit, Instagram, Facebook, Threads, TikTok, LinkedIn, Twitch) also cover the hosts they load content from, so a page the browser restores from its cache can't load new posts or media; the list is in `Sources/HarbourCore/RelatedDomains.swift` and leaves out shared CDNs and link shorteners. Add other subdomains explicitly or choose a preset. IP rules update every five minutes. Addresses on shared hosting and CDNs (Cloudflare, Fastly, Vercel, CloudFront, AWS Global Accelerator) are never IP-blocked, because they also serve unrelated sites; those sites are blocked by name only. Refresh the list with `scripts/update-shared-hosting.py`. Secure DNS endpoints are blocked during website sessions, while ordinary DNS on port 53 remains available.
 
 This is a focus tool, not a security boundary against an administrator. VPNs, proxies, custom encrypted DNS, and changing CDN addresses can affect coverage. Sites sharing a blocked IP may also be affected. Blocking a Meta service can affect other Meta services because their network ranges overlap. Firewall activation can interrupt existing network connections.
+
+Attempts are counted once per burst: one page load or app relaunch within a few seconds is one attempt. Website attempts are counted when the browser uses the system resolver; browsers with their own secure DNS or a VPN can skip the count while still being blocked. Apps already open when a block starts are closed without counting.
 
 Blocked apps are terminated approximately once a second. Save work before starting a block. System recovery tools are excluded. Moving or renaming an app can bypass path-based enforcement.
 
 ## Privacy and storage
 
-Settings and runtime additions are stored in `~/Library/Application Support/Harbour/`. Active state is stored in `/var/db/harbour/state.json`. The helper is installed to `/Library/PrivilegedHelperTools/com.harbour.daemon`, with a launchd job at `/Library/LaunchDaemons/com.harbour.daemon.plist`.
+Settings and runtime additions are stored in `~/Library/Application Support/Harbour/`. Active state is stored in `/var/db/harbour/state.json`, and attempt stats per account in `/var/db/harbour/stats-<account UUID>.json` (kept across blocks: 400 days of detail plus a lifetime total, readable only by root and that account). Blocked names point at the `127.72.66.1` counting sink only after its two ports are bound, the alias is Harbour's own, and PF rules rejecting every other port on that address are loaded; until then, or if any step fails, they go to 0.0.0.0 and nothing is counted. The probe checks one port, so a firewall rule earlier in the main ruleset that passes a specific local service can still let a request to a blocked name on that service's port reach it. This exposure isn't new: macOS treats 0.0.0.0, the classic null route, as the local host, so it reaches services listening on all interfaces on every port.
 
-Harbour has no analytics or account service. Website icons are requested from Google's favicon service, which receives the requested hostname. Website enforcement makes DNS queries; normal network providers can observe those. Diagnostics in `/var/log/harbour-daemon.log` can contain blocked domains and app paths.
+During a website block, blocked names resolve to `127.72.66.1`, a loopback alias the daemon adds for the session. Its listener reads only the requested hostname (TLS SNI or HTTP `Host`), resets the connection and counts it; nothing is served, logged beyond the domain, or sent anywhere. Local servers on `127.0.0.1` are unaffected. If the alias or ports 80/443 are unavailable, Harbour falls back to the `0.0.0.0` null route without counting. The helper is installed to `/Library/PrivilegedHelperTools/com.harbour.daemon`, with a launchd job at `/Library/LaunchDaemons/com.harbour.daemon.plist`.
+
+Harbour has no analytics or account service. The updater fetches `appcast.xml` from GitHub Releases once a day without sending system details; turn this off with **Check for Updates Automatically**. Website icons are requested from Google's favicon service, which receives the requested hostname. Website enforcement makes DNS queries; normal network providers can observe those. Diagnostics in `/var/log/harbour-daemon.log` can contain blocked domains and app paths; the daemon makes the log root-only and writes no per-attempt or per-kill entries. Attempt history is kept per account in `/var/db/harbour/stats-<account UUID>.json`, readable only by root and that account. Only attempts made from that account are counted: website connections are attributed to their owning process, and other users' app launches are closed but not recorded. Website icons in the stats sheet come only from the local cache.
 
 ## Uninstall
 
@@ -79,4 +84,4 @@ Automated tests and universal builds do not replace testing installation, block 
 
 ## License
 
-MIT. See [LICENSE](LICENSE). Inspired by [SelfControl](https://github.com/SelfControlApp/selfcontrol).
+MIT. See [LICENSE](LICENSE). The app bundles [Sparkle](https://sparkle-project.org) under its MIT-style license; the license and its third-party notices ship in the app as `Contents/Resources/Sparkle-LICENSE.txt`. Inspired by [SelfControl](https://github.com/SelfControlApp/selfcontrol).
