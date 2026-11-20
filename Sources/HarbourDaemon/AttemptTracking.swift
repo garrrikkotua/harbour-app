@@ -39,19 +39,35 @@ final class AttemptRecorder {
     /// itself also requires `verifiedOwner()`.
     var ownerUIDValue: uid_t? { ownerUID }
 
-    private enum Verification { case verified, mismatch, pending(lastTry: UInt64) }
+    private enum Verification { case verified(lastCheck: UInt64), mismatch, pending(lastTry: UInt64) }
     private let verifyLock = NSLock()
     private var verification: Verification = .pending(lastTry: 0)
 
     /// The owner's UID once it's confirmed to still belong to `ownerUUID`. A
     /// different account (UID deleted and reassigned) disables recording for
     /// good; an inconclusive lookup (directory unavailable at resume) is
-    /// retried every 30 s, with nothing recorded meanwhile.
+    /// retried every 30 s, with nothing recorded meanwhile. The binding is
+    /// checked again every 5 minutes while the block runs.
     func verifiedOwner() -> uid_t? {
         guard let uid = ownerUID, let expected = ownerUUID else { return nil }
         verifyLock.lock(); defer { verifyLock.unlock() }
         switch verification {
-        case .verified: return uid
+        case .verified(let lastCheck):
+            let now = DispatchTime.now().uptimeNanoseconds
+            guard now - lastCheck >= 300_000_000_000 else { return uid }
+            // A failed lookup keeps the earlier answer; only a different
+            // account revokes it.
+            guard let current = AttemptStats.accountUUID(uid) else {
+                verification = .verified(lastCheck: now)
+                return uid
+            }
+            if current.uppercased() == expected.uppercased() {
+                verification = .verified(lastCheck: now)
+                return uid
+            }
+            verification = .mismatch
+            log("stats: the block owner's account changed during the block; attempts are no longer saved")
+            return nil
         case .mismatch: return nil
         case .pending(let lastTry):
             let now = DispatchTime.now().uptimeNanoseconds
@@ -62,7 +78,7 @@ final class AttemptRecorder {
                 return nil
             }
             if current.uppercased() == expected.uppercased() {
-                verification = .verified
+                verification = .verified(lastCheck: now)
                 return uid
             }
             verification = .mismatch
@@ -75,11 +91,23 @@ final class AttemptRecorder {
         self.sessionStart = sessionStart
         self.ownerUID = ownerUID.flatMap { $0 == 0 ? nil : $0 }
         ownerUUID = recorded?.uppercased() ?? self.ownerUID.flatMap { AttemptStats.accountUUID($0) }
-        path = ownerUUID.map(AttemptStats.filePath(forAccountUUID:))
-        if path == nil { log("stats: block owner unknown; attempts are not saved") }
+        let candidate = ownerUUID.map(AttemptStats.filePath(forAccountUUID:))
+        if candidate == nil { log("stats: block owner unknown; attempts are not saved") }
         // Pre-release builds kept one shared, world-readable file.
         unlink("/var/db/harbour/stats.json")
-        var loaded = path.map(Self.load) ?? AttemptStats()
+        var loaded = AttemptStats()
+        if let candidate {
+            if let existing = Self.load(candidate) {
+                loaded = existing
+                path = candidate
+            } else {
+                // Unreadable and couldn't be moved aside: writing would
+                // replace it, so this session's counts stay in memory.
+                path = nil
+            }
+        } else {
+            path = nil
+        }
         loaded.beginSession(sessionStart)
         loaded.prune(now: Date())
         stats = loaded
@@ -88,19 +116,19 @@ final class AttemptRecorder {
 
     /// Existing history, or empty when there is none. A file that exists but
     /// can't be read is moved aside rather than overwritten, so a bad read
-    /// never erases months of history.
-    private static func load(_ path: String) -> AttemptStats {
+    /// never erases months of history; nil when it couldn't be moved.
+    private static func load(_ path: String) -> AttemptStats? {
         guard FileManager.default.fileExists(atPath: path) else { return AttemptStats() }
         if let data = SecureFileRead.regularFile(atPath: path, maxBytes: maxFileBytes),
            let stats = try? AttemptStats.decoder.decode(AttemptStats.self, from: data) {
             return stats
         }
         let aside = path + ".unreadable-\(Int(Date().timeIntervalSince1970))"
-        if rename(path, aside) == 0 {
-            log("stats: could not read \(path); kept it as \(aside) and started a new history")
-        } else {
-            log("stats: could not read \(path) (errno \(errno)); starting a new history")
+        guard rename(path, aside) == 0 else {
+            log("stats: could not read or move aside \(path) (errno \(errno)); this session is not saved")
+            return nil
         }
+        log("stats: could not read \(path); kept it as \(aside) and started a new history")
         return AttemptStats()
     }
 
@@ -217,8 +245,6 @@ final class AttemptRecorder {
             unlink(tmp)
             return false
         }
-        // Without the owner's read access the app couldn't show the history;
-        // keep the previous file and retry rather than replace it.
         // Without the owner's read access the app couldn't show the history;
         // keep the previous file and retry rather than replace it.
         guard verifiedOwner() != nil, let uuid = ownerUUID.flatMap(UUID.init(uuidString:)) else {
@@ -378,12 +404,17 @@ final class AttemptSink {
         if inFlight.wait(timeout: .now() + 2) == .timedOut {
             log("sink: connections still in flight at shutdown; their attempts are dropped")
         }
+        // The alias goes before the listeners: while it exists PF still
+        // passes 80/443 on it, and a closed port there could be taken by
+        // another local service. Connections arriving meanwhile wait in the
+        // backlog and are reset when the descriptors close.
+        let removed = Self.removeAliasIfOwned()
         stateLock.lock()
         let fds = listeners
         listeners = []
         stateLock.unlock()
         for fd in fds { close(fd) }
-        return Self.removeAliasIfOwned()
+        return removed
     }
 
     var isStopping: Bool { isStopped }

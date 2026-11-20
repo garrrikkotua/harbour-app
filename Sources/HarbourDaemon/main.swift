@@ -765,7 +765,11 @@ func loadState() -> BlockState? {
 /// narrow sense that signals interrupt the 1-second sleep; heavy work is still
 /// done here. Never call this in the "no state at all" case — that would delete
 /// state belonging to a newly starting sibling install.
-func fullCleanup() {
+/// False when Harbour's PF rules could not be reduced to the alias guard; the
+/// state and plist are then kept so launchd respawns the daemon (non-zero
+/// exit) and the next run, seeing an expired block, retries the cleanup.
+@discardableResult
+func fullCleanup() -> Bool {
     log("cleanup: removing hosts + pf rules + state")
     removeHosts()
     // Alias first: while a browser still holds the sink address, the PF
@@ -773,8 +777,9 @@ func fullCleanup() {
     // guard survives (site rules go); the next run removes both.
     if stopAttemptTracking() {
         removePF()
-    } else {
-        keepOnlySinkGuard()
+    } else if !keepOnlySinkGuard() {
+        log("cleanup: PF rules not confirmed; keeping state to retry after respawn")
+        return false
     }
     try? FileManager.default.removeItem(atPath: stateFile)
     try? FileManager.default.removeItem(atPath: plistPath)
@@ -782,6 +787,7 @@ func fullCleanup() {
     // Best-effort bootout — if launchctl is missing or the job is already gone,
     // that's fine. We rely on KeepAlive.SuccessfulExit=false to prevent a loop.
     run("/bin/launchctl", ["bootout", "system/\(label)"], timeoutSec: 3)
+    return true
 }
 
 /// Called when we discover nothing to enforce. Distinct from fullCleanup —
@@ -816,12 +822,19 @@ func liftNetworkRulesKeepingState() {
 /// Set once the block is running; nil during startup cleanup.
 var attemptRecorder: AttemptRecorder?
 var attemptSink: AttemptSink?
+/// Starts the sink (ifconfig, binds) off the enforcement loop; cleanup waits
+/// on it before stopping the sink, so a start never outlives the block.
+let sinkQueue = DispatchQueue(label: "com.harbour.sink")
+/// Set by a sink start that succeeded; the main loop then reloads PF so the
+/// guard goes in.
+var sinkJustStarted = false
 
 /// Stops the sink and saves pending counts. False when Harbour's alias is
 /// still on lo0 afterwards.
 @discardableResult
 func stopAttemptTracking() -> Bool {
     let removed: Bool
+    sinkQueue.sync {}
     if let sink = attemptSink {
         removed = sink.stop()
     } else {
@@ -838,17 +851,30 @@ func stopAttemptTracking() -> Bool {
 /// keep PF rejecting other ports on the alias, so cached sink addresses can't
 /// reach local services. The ownership marker stays, so the next Harbour run
 /// (any later block, or a restart) removes the alias and then this guard.
-func keepOnlySinkGuard() {
+/// False when the guard could not be written or loaded; the caller must then
+/// keep its state so a later run retries.
+@discardableResult
+func keepOnlySinkGuard() -> Bool {
     log("cleanup: \(AttemptSink.address) still present; keeping only its PF guard")
     pfLock.lock(); defer { pfLock.unlock() }
     pfShuttingDown = true
+    setSinkGuard(false)
     var contents = "# Harbour: guard for a loopback alias that could not be removed\n"
     // The listeners are closed: nothing on the alias may be reached.
     contents += sinkGuardRules(allowSinkPorts: false)
-    try? contents.write(toFile: pfAnchorFile, atomically: true, encoding: .utf8)
-    run("/sbin/pfctl", ["-a", pfAnchorName, "-f", pfAnchorFile], timeoutSec: 5)
+    do {
+        try contents.write(toFile: pfAnchorFile, atomically: true, encoding: .utf8)
+    } catch {
+        log("cleanup: could not write the guard-only anchor: \(error)")
+        return false
+    }
+    let (rc, out) = run("/sbin/pfctl", ["-a", pfAnchorName, "-f", pfAnchorFile], timeoutSec: 5)
+    guard rc == 0 else {
+        log("cleanup: loading the guard-only anchor failed (rc=\(rc)): \(out)")
+        return false
+    }
     accumulatedIPs.removeAll()
-    setSinkGuard(false)
+    return true
 }
 
 // MARK: - Signal handling
@@ -885,8 +911,7 @@ guard let state = loadState() else {
 
 if Date() >= state.endTime {
     log("state already expired on startup — running cleanup")
-    fullCleanup()
-    exit(0)
+    exit(fullCleanup() ? 0 : 1)
 }
 
 // Effective enforcement sets — union of original state + runtime additions.
@@ -912,7 +937,8 @@ var killTargets = enforcementTargets(for: effectivePaths)
 // the alias, the history file) must never delay the block itself.
 let initialPIDs = runningPIDs(targets: killTargets, uid: state.ownerUID.map { uid_t($0) })
 applyHosts(domains: effectiveDomains)
-killBlockedApps(targets: killTargets)
+// Killed PIDs are free for reuse; a new launch under one must still count.
+let firstSweepPIDs = Set(killBlockedApps(targets: killTargets).map(\.pid))
 
 let recorder = AttemptRecorder(sessionStart: state.startTime, ownerUID: state.ownerUID.map { uid_t($0) },
                                ownerUUID: state.ownerUUID)
@@ -920,7 +946,7 @@ attemptRecorder = recorder
 recorder.setBlockedDomains(effectiveDomains)
 // Survivors of the first pass (or helpers spawned meanwhile) are still not
 // attempts.
-recorder.excludePreexisting(initialPIDs)
+recorder.excludePreexisting(initialPIDs.filter { !firstSweepPIDs.contains($0) })
 /// Starts the website sink once there is a website to block (an app-only
 /// block leaves networking alone until a site is added).
 var sinkAttempted = false
@@ -932,16 +958,17 @@ func startSinkIfNeeded() {
         recorder.recordHost(host, connectionOwner: { sinkRef?.connectionOwnerUID(connection) })
     })
     sinkRef = sink
-    // A main ruleset that skips loopback would ignore the guard rules.
-    let conf = (try? String(contentsOfFile: pfMainConf, encoding: .utf8)) ?? ""
-    let skipsLoopback = NetworkSafety.pfConfSkipsLoopback(conf)
-    if skipsLoopback {
-        log("sink: \(pfMainConf) skips loopback filtering; attempts will not be counted")
-        return
-    }
-    if sink.start() {
+    sinkQueue.async {
+        // A main ruleset that skips loopback would ignore the guard rules.
+        let conf = (try? String(contentsOfFile: pfMainConf, encoding: .utf8)) ?? ""
+        if NetworkSafety.pfConfSkipsLoopback(conf) {
+            log("sink: \(pfMainConf) skips loopback filtering; attempts will not be counted")
+            return
+        }
+        guard !terminationRequested, sink.start() else { return }
         attemptSink = sink
         pfLock.lock(); sinkGuardWanted = true; pfLock.unlock()
+        sinkStateLock.lock(); sinkJustStarted = true; sinkStateLock.unlock()
     }
 }
 startSinkIfNeeded()
@@ -1086,8 +1113,12 @@ while Date() < state.endTime && !terminationRequested {
     sinkStateLock.lock()
     let sinkChanged = hostsSinkChanged
     hostsSinkChanged = false
+    let sinkStarted = sinkJustStarted
+    sinkJustStarted = false
     sinkStateLock.unlock()
     if sinkChanged { applyHosts(domains: effectiveDomains) }
+    // The guard (and then the sink address in hosts) follows the PF reload.
+    if sinkStarted { schedulePF(force: true) }
     if tick % 30 == 0 {
         applyHosts(domains: effectiveDomains)
         killTargets = enforcementTargets(for: effectivePaths)
@@ -1114,5 +1145,4 @@ if terminationRequested {
     exit(1)
 }
 log("timer expired")
-fullCleanup()
-exit(0)
+exit(fullCleanup() ? 0 : 1)
